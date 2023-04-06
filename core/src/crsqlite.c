@@ -9,6 +9,7 @@ SQLITE_EXTENSION_INIT1
 
 #include "changes-vtab.h"
 #include "consts.h"
+#include "create-crr-vtab.h"
 #include "ext-data.h"
 #include "tableinfo.h"
 #include "triggers.h"
@@ -620,6 +621,11 @@ __declspec(dllexport)
 
   if (rc == SQLITE_OK) {
     rc = sqlite3_create_module_v2(db, "crsql_changes", &crsql_changesModule,
+                                  pExtData, 0);
+  }
+
+  if (rc == SQLITE_OK) {
+    rc = sqlite3_create_module_v2(db, "createcrr", &crsql_createCrrModule,
                                   pExtData, 0);
   }
 

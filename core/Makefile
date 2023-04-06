@@ -50,7 +50,8 @@ ext_files=src/crsqlite.c \
 	src/changes-vtab-write.c \
 	src/ext-data.c \
 	src/get-table.c \
-	src/seen-peers.c
+	src/seen-peers.c \
+	src/create-crr-vtab.c
 ext_headers=src/crsqlite.h \
 	src/util.h \
 	src/tableinfo.h \
