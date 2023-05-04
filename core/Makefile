@@ -24,7 +24,6 @@ endif
 
 ifdef CONFIG_WINDOWS
 LOADABLE_EXTENSION=dll
-export CARGO_TARGET_DIR=./target
 endif
 
 prefix=./dist
@@ -100,6 +99,8 @@ fuzz: $(TARGET_FUZZ)
 	$(prefix)/fuzz
 
 rs_lib_dbg_static = ./rs/bundle/target/debug/libcrsql_bundle.a
+ifdef CONFIG_WINDOWS
+endif
 rs_lib_dbg_static_cpy = ./dbg/libcrsql_bundle-dbg-static.a
 
 rs_lib_loadable = ./rs/bundle/target/release/libcrsql_bundle.a
@@ -120,6 +121,7 @@ endif
 
 $(rs_lib_dbg_static_cpy): FORCE $(dbg_prefix)
 	cd ./rs/bundle && $(rustflags_static) cargo +nightly build $(RS_TARGET) --features static,omit_load_extension $(rs_build_flags)
+	ls -l ./rs/bundle/target/debug/
 	cp $(rs_lib_dbg_static) $(rs_lib_dbg_static_cpy)
 
 $(rs_lib_loadable_cpy): FORCE $(dbg_prefix)

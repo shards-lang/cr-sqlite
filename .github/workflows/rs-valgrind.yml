@@ -36,9 +36,9 @@ jobs:
       - name: Test Fractindex
         run: |
           cd core/rs/fractindex-core
-          cargo valgrind test --features=loadable_extension
+          cargo +nightly valgrind test --features=loadable_extension
 
       - name: Integration Tests
         run: |
           cd core/rs/integration-check
-          cargo valgrind test
+          cargo +nightly valgrind test
