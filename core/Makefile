@@ -117,9 +117,9 @@ ifdef CI_MAYBE_TARGET
 	endif
 endif
 
-PLUS_NIGHTLY = +nightly
+PLUS_NIGHTLY=+nightly
 ifdef CONFIG_WINDOWS
-	PLUS_NIGHTLY = +nightly-x86_64-pc-windows-gnu
+	PLUS_NIGHTLY=
 endif
 
 $(rs_lib_dbg_static_cpy): FORCE $(dbg_prefix)
