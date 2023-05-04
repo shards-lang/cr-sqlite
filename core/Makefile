@@ -119,7 +119,7 @@ endif
 
 PLUS_NIGHTLY=+nightly
 ifdef CONFIG_WINDOWS
-	PLUS_NIGHTLY=
+	PLUS_NIGHTLY=+nightly-x86_64-pc-windows-gnu
 endif
 
 $(rs_lib_dbg_static_cpy): FORCE $(dbg_prefix)

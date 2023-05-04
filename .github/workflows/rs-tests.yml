@@ -36,11 +36,25 @@ jobs:
           rustup default nightly-x86_64-pc-windows-gnu
 
       - name: Test Fractindex
+        if: runner.os != 'Windows'
         run: |
           cd core/rs/fractindex-core
           cargo +nightly test --features=loadable_extension
 
+      - name: Test Fractindex (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd core/rs/fractindex-core
+          cargo test --features=loadable_extension
+
       - name: Integration Tests
+        if: runner.os != 'Windows'
         run: |
           cd core/rs/integration-check
           cargo +nightly test
+
+      - name: Integration Tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd core/rs/integration-check
+          cargo test
