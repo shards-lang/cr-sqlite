@@ -107,12 +107,10 @@ rs_lib_loadable_cpy = ./dist/libcrsql_bundle-loadable.a
 rs_lib_dbg_loadable = ./rs/bundle/target/debug/libcrsql_bundle.a
 rs_lib_dbg_loadable_cpy = ./dbg/libcrsql_bundle-dbg-loadable.a
 
-# this isn't the problem. The problem is that
-# Rust isn't using the nightly-x86_64-pc-windows-gnu target for windows.
-ifdef CONFIG_WINDOWS
-rs_lib_db_static = ./rs/bundle/target/debug/crsql_bundle.lib
-rs_lib_loadable = ./rs/bundle/target/release/crsql_bundle.a
-rs_lib_dbg_loadable = ./rs/bundle/target/debug/crsql_bundle.a
+ifndef CI_MAYBE_TARGET
+	ifdef CONFIG_WINDOWS
+		CI_MAYBE_TARGET = x86_64-pc-windows-gnu
+	endif
 endif
 
 ifdef CI_MAYBE_TARGET
