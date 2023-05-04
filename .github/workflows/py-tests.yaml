@@ -28,7 +28,7 @@ jobs:
 
       - name: Rust Nightly
         run: |
-          rustup default nightly
+          rustup toolchain install nightly
           rustup update
 
       - name: Windows rust toolchain
@@ -36,7 +36,6 @@ jobs:
         run: |
           rustup toolchain install nightly-x86_64-pc-windows-gnu
           rustup component add rust-src --toolchain nightly-x86_64-pc-windows-gnu
-          rustup default nightly-x86_64-pc-windows-gnu
 
       - name: Make loadable
         run: |

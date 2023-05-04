@@ -25,7 +25,7 @@ jobs:
 
       - name: Rust Nightly
         run: |
-          rustup default nightly
+          rustup toolchain install nightly
           rustup update
 
       - name: Rustup Target - Linux
