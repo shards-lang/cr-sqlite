@@ -24,6 +24,7 @@ endif
 
 ifdef CONFIG_WINDOWS
 LOADABLE_EXTENSION=dll
+export CARGO_TARGET_DIR=./target
 endif
 
 prefix=./dist
