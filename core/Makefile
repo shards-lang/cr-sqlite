@@ -99,8 +99,6 @@ fuzz: $(TARGET_FUZZ)
 	$(prefix)/fuzz
 
 rs_lib_dbg_static = ./rs/bundle/target/debug/libcrsql_bundle.a
-ifdef CONFIG_WINDOWS
-endif
 rs_lib_dbg_static_cpy = ./dbg/libcrsql_bundle-dbg-static.a
 
 rs_lib_loadable = ./rs/bundle/target/release/libcrsql_bundle.a
@@ -108,6 +106,14 @@ rs_lib_loadable_cpy = ./dist/libcrsql_bundle-loadable.a
 
 rs_lib_dbg_loadable = ./rs/bundle/target/debug/libcrsql_bundle.a
 rs_lib_dbg_loadable_cpy = ./dbg/libcrsql_bundle-dbg-loadable.a
+
+# this isn't the problem. The problem is that
+# Rust isn't using the nightly-x86_64-pc-windows-gnu target for windows.
+ifdef CONFIG_WINDOWS
+rs_lib_db_static = ./rs/bundle/target/debug/crsql_bundle.lib
+rs_lib_loadable = ./rs/bundle/target/release/crsql_bundle.a
+rs_lib_dbg_loadable = ./rs/bundle/target/debug/crsql_bundle.a
+endif
 
 ifdef CI_MAYBE_TARGET
 	rs_lib_dbg_static = ./rs/bundle/target/$(CI_MAYBE_TARGET)/debug/libcrsql_bundle.a
@@ -121,7 +127,6 @@ endif
 
 $(rs_lib_dbg_static_cpy): FORCE $(dbg_prefix)
 	cd ./rs/bundle && $(rustflags_static) cargo +nightly build $(RS_TARGET) --features static,omit_load_extension $(rs_build_flags)
-	ls -l ./rs/bundle/target/debug/
 	cp $(rs_lib_dbg_static) $(rs_lib_dbg_static_cpy)
 
 $(rs_lib_loadable_cpy): FORCE $(dbg_prefix)
