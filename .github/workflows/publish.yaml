@@ -43,9 +43,9 @@ jobs:
       - name: Windows rust toolchain
         if: runner.os == 'Windows'
         run: |
-          rustup target add x86_64-pc-windows-gnu
           rustup toolchain install nightly-x86_64-pc-windows-gnu
           rustup component add rust-src --toolchain nightly-x86_64-pc-windows-gnu
+          rustup default nightly-x86_64-pc-windows-gnu
 
       - name: Build
         run: |
