@@ -1,11 +1,11 @@
 [submodule "deps/sqlite-no_std"]
 	path = core/rs/sqlite-rs-embedded
-	url = git@github.com:vlcn-io/sqlite-rs-embedded.git
+	url = https://github.com/shards-lang/sqlite-rs-embedded.git
 [submodule "js/deps/emsdk"]
 	path = js/deps/emsdk
-	url = git@github.com:emscripten-core/emsdk.git
+	url = https://github.com/emscripten-core/emsdk.git
 [submodule "js/deps/wa-sqlite"]
 	path = js/deps/wa-sqlite
-	url = git@github.com:vlcn-io/wa-sqlite.git
+	url = https://github.com/vlcn-io/wa-sqlite.git
 [submodule "sqlite-rs-embedded"]
-	url = git@github.com:vlcn-io/sqlite-rs-embedded.git
+	url = https://github.com/shards-lang/sqlite-rs-embedded.git

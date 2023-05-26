@@ -14,17 +14,17 @@ use crsql_fractindex_core::sqlite3_crsqlfractionalindex_init;
 use sqlite_nostd as sqlite;
 use sqlite_nostd::SQLite3Allocator;
 
-#[global_allocator]
-static ALLOCATOR: SQLite3Allocator = SQLite3Allocator {};
+// #[global_allocator]
+// static ALLOCATOR: SQLite3Allocator = SQLite3Allocator {};
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    core::intrinsics::abort()
-}
+// #[panic_handler]
+// fn panic(_info: &PanicInfo) -> ! {
+//     core::intrinsics::abort()
+// }
 
-#[cfg(not(target_family = "wasm"))]
-#[lang = "eh_personality"]
-extern "C" fn eh_personality() {}
+// #[cfg(not(target_family = "wasm"))]
+// #[lang = "eh_personality"]
+// extern "C" fn eh_personality() {}
 
 #[cfg(target_family = "wasm")]
 #[no_mangle]
