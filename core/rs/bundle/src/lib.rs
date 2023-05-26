@@ -82,3 +82,10 @@ pub extern "C" fn sqlite3_crsqlrustbundle_init(
 
     sqlite3_crsqlcore_init(db, err_msg, api)
 }
+
+#[used]
+static KEEP_MY_FUNCTION: extern "C" fn(
+    db: *mut sqlite::sqlite3,
+    err_msg: *mut *mut c_char,
+    api: *mut sqlite::api_routines,
+) -> c_int = sqlite3_crsqlrustbundle_init;
