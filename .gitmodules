@@ -3,7 +3,7 @@
 	url = https://github.com/emscripten-core/emsdk.git
 [submodule "js/deps/wa-sqlite"]
 	path = js/deps/wa-sqlite
-	url = https://github.com/vlcn-io/wa-sqlite.git
+	url = https://github.com/shards-lang/wa-sqlite.git
 [submodule "core/rs/sqlite-rs-embedded"]
   path = core/rs/sqlite-rs-embedded
-	url = https://github.com/vlcn-io/sqlite-rs-embedded.git
+	url = https://github.com/shards-lang/sqlite-rs-embedded.git
