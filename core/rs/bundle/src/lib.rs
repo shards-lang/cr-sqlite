@@ -65,7 +65,7 @@ use sqlite_nostd::SQLite3Allocator;
 // #[no_mangle]
 // pub fn __rust_alloc_error_handler(_: Layout) -> ! {
 //     core::intrinsics::abort()
-}
+// }
 
 #[no_mangle]
 pub extern "C" fn sqlite3_crsqlrustbundle_init(
