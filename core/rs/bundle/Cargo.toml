@@ -17,15 +17,9 @@ crsql_fractindex_core = {path="../fractindex-core"}
 crsql_core = { path="../core" }
 sqlite_nostd = { path="../sqlite-rs-embedded/sqlite_nostd" }
 
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"
-
-[features]
+[features] 
 loadable_extension = [
-  "sqlite_nostd/loadable_extension",
+  "sqlite_nostd/loadable_extension", 
   "crsql_fractindex_core/loadable_extension",
   "crsql_core/loadable_extension"
 ]
