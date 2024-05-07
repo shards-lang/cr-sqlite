@@ -1,4 +1,4 @@
-#![no_std]
+
 extern crate alloc;
 mod t;
 use alloc::ffi::CString;

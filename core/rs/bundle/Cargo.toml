@@ -17,12 +17,6 @@ crsql_fractindex_core = {path="../fractindex-core"}
 crsql_core = { path="../core" }
 sqlite_nostd = { path="../sqlite-rs-embedded/sqlite_nostd" }
 
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"
-
 [features]
 test = ["crsql_core/test"]
 libsql = ["crsql_core/libsql"]
