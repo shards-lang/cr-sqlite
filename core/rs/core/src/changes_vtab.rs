@@ -25,6 +25,8 @@ use crate::changes_vtab_read::changes_union_query;
 use crate::pack_columns::bind_package_to_stmt;
 use crate::pack_columns::unpack_columns;
 
+use sqlite_nostd::sqlite_alloc;
+
 fn changes_crsr_finalize(crsr: *mut crsql_Changes_cursor) -> c_int {
     // Assign pointers to null after freeing
     // since we can get into this twice for the same cursor object.
@@ -178,10 +180,17 @@ fn changes_best_index(
     unsafe {
         (*index_info).idxNum = idx_num;
         (*index_info).orderByConsumed = if order_by_consumed { 1 } else { 0 };
-        // forget str
-        let (ptr, _, _) = str.into_raw_parts();
-        // pass to c. We've manually null terminated the string.
-        // sqlite will free it for us.
+
+        // eh ok we need to copy str with sqlite memory
+        let ptr = sqlite_alloc(str.len() + 1);
+        if ptr.is_null() {
+            return Err(ResultCode::NOMEM);
+        }
+        // copy str into sqlite memory
+        ptr.copy_from(str.as_ptr(), str.len());
+        // add null terminator
+        ptr.add(str.len() as usize).write(0);
+
         (*index_info).idxStr = ptr as *mut c_char;
         (*index_info).needToFreeIdxStr = 1;
     }
@@ -331,7 +340,7 @@ unsafe fn changes_next(
 ) -> Result<ResultCode, ResultCode> {
     if (*cursor).pChangesStmt.is_null() {
         let err = CString::new("pChangesStmt is null in changes_next")?;
-        (*vtab).zErrMsg = err.into_raw();
+        (*vtab).zErrMsg = sqlite::copy_into_sqlite_mem_cstring(err);
         return Err(ResultCode::ABORT);
     }
 
@@ -379,7 +388,7 @@ unsafe fn changes_next(
 
     if tbl_info_index.is_none() {
         let err = CString::new(format!("could not find schema for table {}", tbl))?;
-        (*vtab).zErrMsg = err.into_raw();
+        (*vtab).zErrMsg = sqlite::copy_into_sqlite_mem_cstring(err);
         return Err(ResultCode::ERROR);
     }
     // TODO: technically safe since we checked `is_none` but this should be more idiomatic
@@ -391,7 +400,7 @@ unsafe fn changes_next(
 
     if tbl_info.pks.len() == 0 {
         let err = CString::new(format!("crr {} is missing primary keys", tbl))?;
-        (*vtab).zErrMsg = err.into_raw();
+        (*vtab).zErrMsg = sqlite::copy_into_sqlite_mem_cstring(err);
         return Err(ResultCode::ERROR);
     }
 
@@ -549,7 +558,7 @@ pub extern "C" fn crsql_changes_update(
             "Only INSERT and SELECT statements are allowed against the crsql changes table",
         ) {
             unsafe {
-                (*vtab).zErrMsg = err.into_raw();
+                (*vtab).zErrMsg = sqlite::copy_into_sqlite_mem_cstring(err);
             }
             return ResultCode::MISUSE as c_int;
         } else {

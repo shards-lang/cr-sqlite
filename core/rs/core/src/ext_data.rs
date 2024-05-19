@@ -56,7 +56,7 @@ pub fn recreate_db_version_stmt(
 
     let db_version_stmt = db.prepare_v3(&union, sqlite::PREPARE_PERSISTENT)?;
     unsafe {
-        (*ext_data).pDbVersionStmt = db_version_stmt.into_raw();
+        (*ext_data).pDbVersionStmt = db_version_stmt.into_raw(); // ownership transferred, should be ok as it's created by sqlite3_prepare_v3
     }
 
     Ok(ResultCode::OK)

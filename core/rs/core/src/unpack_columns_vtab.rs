@@ -34,7 +34,7 @@ extern "C" fn connect(
 
     unsafe {
         // TODO: more ergonomic rust bindings
-        *vtab = Box::into_raw(Box::new(sqlite::vtab {
+        *vtab = Box::into_raw(Box::new(sqlite::vtab { // disconnect will drop this
             nRef: 0,
             pModule: core::ptr::null(),
             zErrMsg: core::ptr::null_mut(),
@@ -78,7 +78,7 @@ extern "C" fn best_index(vtab: *mut sqlite::vtab, index_info: *mut sqlite::index
                     "no package column specified. Got {:?} instead",
                     Columns::PACKAGE
                 ))
-                .map_or(core::ptr::null_mut(), |f| f.into_raw());
+                .map_or(core::ptr::null_mut(), |f| sqlite::copy_into_sqlite_mem_cstring(f));
             }
             return ResultCode::MISUSE as c_int;
         } else {
@@ -106,7 +106,7 @@ extern "C" fn open(_vtab: *mut sqlite::vtab, cursor: *mut *mut sqlite::vtab_curs
             crsr: 0,
             unpacked: None,
         });
-        let raw_cursor = Box::into_raw(boxed);
+        let raw_cursor = Box::into_raw(boxed); // close will drop this
         *cursor = raw_cursor.cast::<sqlite::vtab_cursor>();
     }
 
@@ -134,7 +134,7 @@ extern "C" fn filter(
     if args.len() < 1 {
         unsafe {
             (*(*cursor).pVtab).zErrMsg = CString::new("Zero args passed to filter")
-                .map_or(core::ptr::null_mut(), |f| f.into_raw());
+                .map_or(core::ptr::null_mut(), |f| sqlite::copy_into_sqlite_mem_cstring(f));
         }
         return ResultCode::MISUSE as c_int;
     }
@@ -210,7 +210,7 @@ extern "C" fn column(
                 ResultCode::OK as c_int
             } else {
                 (*(*cursor).pVtab).zErrMsg = CString::new("No columns to unpack!")
-                    .map_or(core::ptr::null_mut(), |f| f.into_raw());
+                    .map_or(core::ptr::null_mut(), |f| sqlite::copy_into_sqlite_mem_cstring(f));
                 ResultCode::ABORT as c_int
             }
         }
@@ -218,7 +218,7 @@ extern "C" fn column(
         unsafe {
             (*(*cursor).pVtab).zErrMsg =
                 CString::new(format!("Selected a column besides cell! {}", col_num))
-                    .map_or(core::ptr::null_mut(), |f| f.into_raw());
+                    .map_or(core::ptr::null_mut(), |f| sqlite::copy_into_sqlite_mem_cstring(f));
         }
         ResultCode::MISUSE as c_int
     }

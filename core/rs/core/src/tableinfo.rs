@@ -734,7 +734,7 @@ impl Drop for ColumnInfo {
 #[no_mangle]
 pub extern "C" fn crsql_init_table_info_vec(ext_data: *mut crsql_ExtData) {
     let vec: Vec<TableInfo> = vec![];
-    unsafe { (*ext_data).tableInfos = Box::into_raw(Box::new(vec)) as *mut c_void }
+    unsafe { (*ext_data).tableInfos = Box::into_raw(Box::new(vec)) as *mut c_void } // we drop this under crsql_drop_table_info_vec
 }
 
 #[no_mangle]

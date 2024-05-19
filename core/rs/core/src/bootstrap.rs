@@ -152,7 +152,7 @@ fn maybe_update_db_inner(
         // not supported
         let cstring = CString::new(format!("Opening a db created with cr-sqlite version {} is not supported. Upcoming release 0.15.0 is a breaking change.", recorded_version))?;
         unsafe {
-            (*err_msg) = cstring.into_raw();
+            (*err_msg) = sqlite::copy_into_sqlite_mem_cstring(cstring);
             return Err(ResultCode::ERROR);
         }
     }
