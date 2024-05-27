@@ -1,7 +1,4 @@
 
-#![feature(core_intrinsics)]
-#![feature(lang_items)]
-
 extern crate alloc;
 
 use core::alloc::Layout;
