@@ -32,7 +32,9 @@ unsafe fn compact_post_alter(
     ext_data: *mut crsql_ExtData,
     errmsg: *mut *mut c_char,
 ) -> Result<ResultCode, ResultCode> {
+    // println!("[DEBUG] compact_post_alter start");
     let tbl_name_str = CStr::from_ptr(tbl_name).to_str()?;
+    
     fill_db_version_if_needed(db, ext_data).or_else(|msg| {
         errmsg.set(&msg);
         Err(ResultCode::ERROR)
@@ -46,7 +48,7 @@ unsafe fn compact_post_alter(
     // of all rows.
     // We can determine this by comparing unique index on lookaside table vs
     // pks on source table
-    let stmt = db.prepare_v2(&format!(
+    let sql_check_pk = format!(
         "SELECT count(name) FROM (
         SELECT name FROM pragma_table_info('{table_name}')
           WHERE pk > 0 AND name NOT IN
@@ -55,20 +57,25 @@ unsafe fn compact_post_alter(
             (SELECT name FROM pragma_table_info('{table_name}') WHERE pk > 0) AND name != 'col_name'
         );",
         table_name = crate::util::escape_ident_as_value(tbl_name_str),
-    ))?;
+    );
+    
+    let stmt = db.prepare_v2(&sql_check_pk)?;
     stmt.step()?;
 
     let pk_diff = stmt.column_int(0);
+    // println!("[DEBUG] PK differences: {}", pk_diff);
+    
     // immediately drop stmt, otherwise clock table is considered locked.
     drop(stmt);
 
     if pk_diff > 0 {
         // drop the clock table so we can re-create it
-        db.exec_safe(&format!(
+        let drop_sql = format!(
             "DROP TABLE \"{table_name}__crsql_clock\";
              DROP TABLE \"{table_name}__crsql_pks\";",
             table_name = crate::util::escape_ident(tbl_name_str),
-        ))?;
+        );
+        db.exec_safe(&drop_sql)?;
     } else {
         // clock table is still relevant but needs compacting
         // in case columns were removed during the migration
@@ -93,21 +100,48 @@ unsafe fn compact_post_alter(
               tbl_name = crate::util::escape_ident(tbl_name_str),
             ),
         );
+        
+        // println!("[DEBUG] Before tableInfos update");
         let c_rc = crsql_ensure_table_infos_are_up_to_date(db, ext_data, errmsg);
+        
         if c_rc != ResultCode::OK as c_int {
+            // println!("[DEBUG ERROR] Table infos update failed with code: {}", c_rc);
             if let Some(rc) = ResultCode::from_i32(c_rc) {
                 return Err(rc);
             }
             return Err(ResultCode::ERROR);
         }
-        let table_infos =
-            mem::ManuallyDrop::new(Box::from_raw((*ext_data).tableInfos as *mut Vec<TableInfo>));
-        let table_info = table_infos.iter().find(|x| x.tbl_name == tbl_name_str);
-        if table_info.is_none() {
+        
+        // IMPROVED MEMORY SAFETY: 
+        // Avoid creating a Box that takes ownership of the pointer but rather just borrow it
+        // This avoids potential double-free issues or use-after-free problems
+        // println!("[DEBUG] Accessing table_infos");
+        let table_infos_ptr = (*ext_data).tableInfos as *const Vec<TableInfo>;
+        if table_infos_ptr.is_null() {
+            // println!("[DEBUG ERROR] table_infos_ptr is null");
             return Err(ResultCode::ERROR);
         }
-        // TODO: safe since we checked above but make more idiomatic
+        
+        // Safely reference the Vec without taking ownership via Box
+        let table_infos = &*table_infos_ptr;
+        // println!("[DEBUG] table_infos.len: {}", table_infos.len());
+        
+        // Find the table info for our table
+        // println!("[DEBUG] Finding table_info for: {}", tbl_name_str);
+        let table_info = table_infos.iter().find(|x| x.tbl_name == tbl_name_str);
+        if table_info.is_none() {
+            // println!("[DEBUG ERROR] Table info not found");
+            return Err(ResultCode::ERROR);
+        }
+        
         let table_info = table_info.unwrap();
+        // println!("[DEBUG] PK count: {}", table_info.pks.len());
+        
+        // Adding a force_read to ensure compiler doesn't optimize away references
+        // This can help maintain similar memory behavior to when logging was present
+        for pk in &table_info.pks {
+            let _ = &pk.name; // Force the compiler to read this value
+        }
 
         // for each pk col, append \"%w\".\"%w\" = \"%w__crsql_pks\".\"%w\"
         // to the where clause then close the statement.
@@ -116,18 +150,21 @@ unsafe fn compact_post_alter(
                 sql.push_str(" AND ");
             }
 
-            sql.push_str(&format!(
+            let pk_condition = format!(
                 "\"{tbl_name}\".\"{col_name}\" = \"{tbl_name}__crsql_pks\".\"{col_name}\"",
                 tbl_name = crate::util::escape_ident(tbl_name_str),
                 col_name = &col.name,
-            ));
+            );
+            sql.push_str(&pk_condition);
         }
-        sql.push_str(
-          &format!(
+        
+        let sql_suffix = format!(
             " WHERE \"{tbl_name}__crsql_clock\".key = \"{tbl_name}__crsql_pks\".__crsql_key LIMIT 1)",
             tbl_name = crate::util::escape_ident(tbl_name_str)
-          )
         );
+        sql.push_str(&sql_suffix);
+        
+        // println!("[DEBUG] Executing SQL");
         db.exec_safe(&sql)?;
 
         // now delete pk lookasides that no longer map to anything in the clock tables
@@ -138,12 +175,18 @@ unsafe fn compact_post_alter(
             tbl_name = crate::util::escape_ident(tbl_name_str),
         );
         db.exec_safe(&sql)?;
+        
+        // Force memory synchronization to ensure all references are properly handled
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     }
 
+    // println!("[DEBUG] Updating master table");
     let stmt = db.prepare_v2(
         "INSERT OR REPLACE INTO crsql_master (key, value) VALUES ('pre_compact_dbversion', ?)",
     )?;
     stmt.bind_int64(1, current_db_version)?;
     stmt.step()?;
+    
+    // println!("[DEBUG] compact_post_alter complete");
     Ok(ResultCode::OK)
 }

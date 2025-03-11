@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), no_std)]
+// #![cfg_attr(not(test), no_std)]
 #![feature(vec_into_raw_parts)]
 
 // TODO: these pub mods are exposed for the integration testing
