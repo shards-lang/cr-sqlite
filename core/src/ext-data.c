@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "consts.h"
+#include "str_util.h"
 
 void crsql_clear_stmt_cache(crsql_ExtData *pExtData);
 void crsql_init_table_info_vec(crsql_ExtData *pExtData);
@@ -185,4 +186,85 @@ int crsql_fetchPragmaDataVersion(sqlite3 *db, crsql_ExtData *pExtData) {
   }
 
   return 0;
+}
+
+// Recreate the db_version statement by querying all clock tables
+int crsql_recreate_db_version_stmt(sqlite3 *db, crsql_ExtData *pExtData) {
+  // Finalize old statement
+  if (pExtData->pDbVersionStmt != NULL) {
+    sqlite3_finalize(pExtData->pDbVersionStmt);
+    pExtData->pDbVersionStmt = NULL;
+  }
+
+  // Get list of all clock tables
+  int rc = sqlite3_step(pExtData->pSelectClockTablesStmt);
+
+  // Build array of table names
+  char **table_names = NULL;
+  int num_tables = 0;
+  int capacity = 8;
+
+  table_names = sqlite3_malloc(sizeof(char*) * capacity);
+  if (!table_names) {
+    sqlite3_reset(pExtData->pSelectClockTablesStmt);
+    return SQLITE_NOMEM;
+  }
+
+  while (rc == SQLITE_ROW) {
+    const char *tbl_name = (const char *)sqlite3_column_text(pExtData->pSelectClockTablesStmt, 0);
+
+    if (num_tables >= capacity) {
+      capacity *= 2;
+      char **new_array = sqlite3_realloc(table_names, sizeof(char*) * capacity);
+      if (!new_array) {
+        for (int i = 0; i < num_tables; i++) sqlite3_free(table_names[i]);
+        sqlite3_free(table_names);
+        sqlite3_reset(pExtData->pSelectClockTablesStmt);
+        return SQLITE_NOMEM;
+      }
+      table_names = new_array;
+    }
+
+    table_names[num_tables] = sqlite3_mprintf("%s", tbl_name);
+    if (!table_names[num_tables]) {
+      for (int i = 0; i < num_tables; i++) sqlite3_free(table_names[i]);
+      sqlite3_free(table_names);
+      sqlite3_reset(pExtData->pSelectClockTablesStmt);
+      return SQLITE_NOMEM;
+    }
+    num_tables++;
+
+    rc = sqlite3_step(pExtData->pSelectClockTablesStmt);
+  }
+
+  sqlite3_reset(pExtData->pSelectClockTablesStmt);
+
+  if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+    for (int i = 0; i < num_tables; i++) sqlite3_free(table_names[i]);
+    sqlite3_free(table_names);
+    return rc;
+  }
+
+  // No clock tables? Return special code
+  if (num_tables == 0) {
+    sqlite3_free(table_names);
+    return SQLITE_DONE;
+  }
+
+  // Build UNION query
+  char *union_query = crsql_get_db_version_union_query(table_names, num_tables);
+
+  for (int i = 0; i < num_tables; i++) sqlite3_free(table_names[i]);
+  sqlite3_free(table_names);
+
+  if (!union_query) {
+    return SQLITE_NOMEM;
+  }
+
+  // Prepare the statement
+  rc = sqlite3_prepare_v3(db, union_query, -1, SQLITE_PREPARE_PERSISTENT,
+                          &pExtData->pDbVersionStmt, NULL);
+  sqlite3_free(union_query);
+
+  return rc;
 }
