@@ -19,7 +19,7 @@
 #define SET_SYNC_BIT "SELECT crsql_internal_sync_bit(1)"
 #define CLEAR_SYNC_BIT "SELECT crsql_internal_sync_bit(0)"
 
-#define TBL_SITE_ID "site_id"
+#define TBL_SITE_ID "crsql_site_id"
 #define TBL_DB_VERSION "db_version"
 #define TBL_SCHEMA "crsql_master"
 #define UNION_ALL "UNION ALL"
@@ -36,6 +36,8 @@
 // 00 00 00 00
 // Given we can't prefix an int with 0s, read from right to left.
 // Rightmost is always `bb`
-#define CRSQLITE_VERSION 130000
+#define CRSQLITE_VERSION 160300
+#define CRSQLITE_VERSION_STR "0.16.3"
+#define CRSQLITE_VERSION_0_15_0 150000
 
 #endif
