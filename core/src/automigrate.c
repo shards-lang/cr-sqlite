@@ -498,6 +498,8 @@ static int maybe_modify_table(sqlite3 *db, const char *table,
     }
   }
 
+  if (rc == SQLITE_NOMEM) goto maybe_modify_cleanup;
+
   // If this is a CRR, begin alter
   int isCrr = is_crr_check(db, table);
   if (isCrr) {
@@ -524,7 +526,7 @@ static int maybe_modify_table(sqlite3 *db, const char *table,
     sqlite3_finalize(s);
   }
 
-  // Cleanup
+maybe_modify_cleanup:
   for (int i = 0; i < memLen; i++) sqlite3_free(memCols[i]);
   sqlite3_free(memCols);
   for (int i = 0; i < localLen; i++) sqlite3_free(localCols[i]);
