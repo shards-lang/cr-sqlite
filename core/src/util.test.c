@@ -239,6 +239,7 @@ static void testCompareSqliteValues() {
   printf("CompareSqliteValues\n");
   sqlite3 *db;
   sqlite3_open(":memory:", &db);
+  // Extension is auto-loaded via core_init in unit test builds
 
   sqlite3_stmt *pStmt;
   int rc;
@@ -321,7 +322,7 @@ static void testCompareSqliteValues() {
                                      sqlite3_column_value(pStmt, 1)) < 0);
   sqlite3_finalize(pStmt);
 
-  sqlite3_close(db);
+  crsql_close(db);
   printf("\t\e[0;32mSuccess\e[0m\n");
 }
 
