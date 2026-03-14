@@ -482,6 +482,11 @@ static int changes_next_impl(crsql_Changes_cursor *cursor,
     return SQLITE_ERROR;
   }
 
+  if (!cid) {
+    vtab->zErrMsg = sqlite3_mprintf("out of memory reading cid");
+    return SQLITE_NOMEM;
+  }
+
   if (strcmp(cid, SENTINEL_CID) == 0) {
     // Sentinel row: use CL parity to distinguish delete vs pk-only insert.
     // Even CL = deleted, odd CL = alive (pk-only insert).
@@ -1109,6 +1114,10 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
     return SQLITE_ERROR;
   }
   const char *insertCol = (const char *)sqlite3_value_text(insertColVal);
+  if (!insertCol) {
+    *errmsg = sqlite3_mprintf("crsql - cid column must not be null");
+    return SQLITE_ERROR;
+  }
 
   sqlite3_value *insertVal = argv[2 + CHANGES_COL_CVAL];
   sqlite3_int64 insertColVrsn =

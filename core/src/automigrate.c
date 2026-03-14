@@ -6,12 +6,7 @@
 #include "tableinfo.h"
 #include "util.h"
 
-// Safe realloc: returns new pointer or NULL without leaking the original.
-static void *safe_realloc(void *ptr, int newSize) {
-  void *newPtr = sqlite3_realloc(ptr, newSize);
-  if (!newPtr) sqlite3_free(ptr);
-  return newPtr;
-}
+
 
 // ---------- strip_crr_statements ----------
 // Remove lines containing crsql_as_crr or crsql_fract_as_ordered
@@ -323,8 +318,9 @@ static int maybe_update_indices(sqlite3 *db, const char *table,
   while (sqlite3_step(memFetch) == SQLITE_ROW) {
     if (memLen >= memCap) {
       memCap *= 2;
-      memIndices = safe_realloc(memIndices, sizeof(char *) * memCap);
-      if (!memIndices) { sqlite3_finalize(memFetch); sqlite3_finalize(localFetch); return SQLITE_NOMEM; }
+      void *tmp = sqlite3_realloc(memIndices, sizeof(char *) * memCap);
+      if (!tmp) { sqlite3_finalize(memFetch); sqlite3_finalize(localFetch); for (int j = 0; j < memLen; j++) sqlite3_free(memIndices[j]); sqlite3_free(memIndices); return SQLITE_NOMEM; }
+      memIndices = tmp;
     }
     memIndices[memLen++] =
         sqlite3_mprintf("%s", sqlite3_column_text(memFetch, 0));
@@ -357,15 +353,17 @@ static int maybe_update_indices(sqlite3 *db, const char *table,
     if (!found) {
       if (remLen >= remCap) {
         remCap *= 2;
-        removed = safe_realloc(removed, sizeof(char *) * remCap);
-        if (!removed) { remLen = 0; rc = SQLITE_NOMEM; break; }
+        void *tmp = sqlite3_realloc(removed, sizeof(char *) * remCap);
+        if (!tmp) { rc = SQLITE_NOMEM; break; }
+        removed = tmp;
       }
       removed[remLen++] = sqlite3_mprintf("%s", name);
     } else {
       if (modLen >= modCap) {
         modCap *= 2;
-        modified = safe_realloc(modified, sizeof(char *) * modCap);
-        if (!modified) { modLen = 0; rc = SQLITE_NOMEM; break; }
+        void *tmp2 = sqlite3_realloc(modified, sizeof(char *) * modCap);
+        if (!tmp2) { rc = SQLITE_NOMEM; break; }
+        modified = tmp2;
       }
       modified[modLen++] = sqlite3_mprintf("%s", name);
     }
@@ -421,8 +419,9 @@ static int maybe_modify_table(sqlite3 *db, const char *table,
   while (sqlite3_step(memStmt) == SQLITE_ROW) {
     if (memLen >= memCap) {
       memCap *= 2;
-      memCols = safe_realloc(memCols, sizeof(char *) * memCap);
-      if (!memCols) { memLen = 0; sqlite3_finalize(memStmt); sqlite3_finalize(localStmt); return SQLITE_NOMEM; }
+      void *tmp = sqlite3_realloc(memCols, sizeof(char *) * memCap);
+      if (!tmp) { for (int j = 0; j < memLen; j++) sqlite3_free(memCols[j]); sqlite3_free(memCols); sqlite3_finalize(memStmt); sqlite3_finalize(localStmt); return SQLITE_NOMEM; }
+      memCols = tmp;
     }
     memCols[memLen++] =
         sqlite3_mprintf("%s", sqlite3_column_text(memStmt, 0));
@@ -448,8 +447,9 @@ static int maybe_modify_table(sqlite3 *db, const char *table,
     const char *name = (const char *)sqlite3_column_text(localStmt, 0);
     if (localLen >= localCap) {
       localCap *= 2;
-      localCols = safe_realloc(localCols, sizeof(char *) * localCap);
-      if (!localCols) { localLen = 0; rc = SQLITE_NOMEM; break; }
+      void *tmp = sqlite3_realloc(localCols, sizeof(char *) * localCap);
+      if (!tmp) { rc = SQLITE_NOMEM; break; }
+      localCols = tmp;
     }
     localCols[localLen++] = sqlite3_mprintf("%s", name);
 
@@ -460,8 +460,9 @@ static int maybe_modify_table(sqlite3 *db, const char *table,
     if (!found) {
       if (remLen >= remCap) {
         remCap *= 2;
-        removedCols = safe_realloc(removedCols, sizeof(char *) * remCap);
-        if (!removedCols) { remLen = 0; rc = SQLITE_NOMEM; break; }
+        void *tmp2 = sqlite3_realloc(removedCols, sizeof(char *) * remCap);
+        if (!tmp2) { rc = SQLITE_NOMEM; break; }
+        removedCols = tmp2;
       }
       removedCols[remLen++] = sqlite3_mprintf("%s", name);
     }
@@ -489,8 +490,9 @@ static int maybe_modify_table(sqlite3 *db, const char *table,
     if (!found) {
       if (addLen >= addCap) {
         addCap *= 2;
-        addedCols = safe_realloc(addedCols, sizeof(char *) * addCap);
-        if (!addedCols) { addLen = 0; rc = SQLITE_NOMEM; break; }
+        void *tmp3 = sqlite3_realloc(addedCols, sizeof(char *) * addCap);
+        if (!tmp3) { rc = SQLITE_NOMEM; break; }
+        addedCols = tmp3;
       }
       addedCols[addLen++] = sqlite3_mprintf("%s", memCols[i]);
     }
@@ -565,8 +567,9 @@ static int migrate_to(sqlite3 *localDb, sqlite3 *memDb) {
   while (sqlite3_step(memFetch) == SQLITE_ROW) {
     if (memLen >= memCap) {
       memCap *= 2;
-      memTables = safe_realloc(memTables, sizeof(char *) * memCap);
-      if (!memTables) { memLen = 0; sqlite3_finalize(memFetch); sqlite3_finalize(localFetch); return SQLITE_NOMEM; }
+      void *tmp = sqlite3_realloc(memTables, sizeof(char *) * memCap);
+      if (!tmp) { for (int j = 0; j < memLen; j++) sqlite3_free(memTables[j]); sqlite3_free(memTables); sqlite3_finalize(memFetch); sqlite3_finalize(localFetch); return SQLITE_NOMEM; }
+      memTables = tmp;
     }
     memTables[memLen++] =
         sqlite3_mprintf("%s", sqlite3_column_text(memFetch, 0));
@@ -597,15 +600,17 @@ static int migrate_to(sqlite3 *localDb, sqlite3 *memDb) {
     if (found) {
       if (modLen >= modCap) {
         modCap *= 2;
-        modifiedTables = safe_realloc(modifiedTables, sizeof(char *) * modCap);
-        if (!modifiedTables) { modLen = 0; rc = SQLITE_NOMEM; break; }
+        void *tmp = sqlite3_realloc(modifiedTables, sizeof(char *) * modCap);
+        if (!tmp) { rc = SQLITE_NOMEM; break; }
+        modifiedTables = tmp;
       }
       modifiedTables[modLen++] = sqlite3_mprintf("%s", name);
     } else {
       if (remLen >= remCap) {
         remCap *= 2;
-        removedTables = safe_realloc(removedTables, sizeof(char *) * remCap);
-        if (!removedTables) { remLen = 0; rc = SQLITE_NOMEM; break; }
+        void *tmp2 = sqlite3_realloc(removedTables, sizeof(char *) * remCap);
+        if (!tmp2) { rc = SQLITE_NOMEM; break; }
+        removedTables = tmp2;
       }
       removedTables[remLen++] = sqlite3_mprintf("%s", name);
     }
