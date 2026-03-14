@@ -8,6 +8,7 @@ tests/test_as_ordered.py
 tests/test_cl_merging.py
 tests/test_cl_triggers.py
 tests/test_commit_alter_perf.py
+tests/test_config.py
 tests/test_crsql_changes_filters.py
 tests/test_dbversion.py
 tests/test_insert_new_rows.py

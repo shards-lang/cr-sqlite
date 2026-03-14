@@ -1,3 +1,0 @@
-[submodule "core/rs/sqlite-rs-embedded"]
-  path = core/rs/sqlite-rs-embedded
-	url = https://github.com/shards-lang/sqlite-rs-embedded.git
