@@ -620,7 +620,7 @@ int crsql_get_local_cl_stmt(sqlite3 *db, crsql_TableInfo *tblInfo,
   char *esc = crsql_escape_ident(tblInfo->tblName);
   char *sql = sqlite3_mprintf(
       "SELECT COALESCE("
-      "(SELECT col_version FROM \"%s__crsql_clock\" WHERE key = ? AND col_name = '" DELETE_SENTINEL "'),"
+      "(SELECT col_version FROM \"%s__crsql_clock\" WHERE key = ? AND col_name = '" SENTINEL_CID "'),"
       "(SELECT 1 FROM \"%s__crsql_clock\" WHERE key = ?)"
       ")", esc, esc);
   sqlite3_free(esc);
@@ -697,7 +697,7 @@ int crsql_get_merge_delete_drop_clocks_stmt(sqlite3 *db,
   }
   char *esc = crsql_escape_ident(tblInfo->tblName);
   char *sql = sqlite3_mprintf(
-      "DELETE FROM \"%s__crsql_clock\" WHERE key = ? AND col_name IS NOT '" DELETE_SENTINEL "'",
+      "DELETE FROM \"%s__crsql_clock\" WHERE key = ? AND col_name IS NOT '" SENTINEL_CID "'",
       esc);
   sqlite3_free(esc);
   return lazy_prepare(db, &tblInfo->pMergeDeleteDropClocksStmt, sql, ppStmt);
@@ -713,7 +713,7 @@ int crsql_get_zero_clocks_on_resurrect_stmt(sqlite3 *db,
   char *esc = crsql_escape_ident(tblInfo->tblName);
   char *sql = sqlite3_mprintf(
       "UPDATE \"%s__crsql_clock\" SET col_version = 0, db_version = crsql_next_db_version(?)"
-      " WHERE key = ? AND col_name IS NOT '" INSERT_SENTINEL "'",
+      " WHERE key = ? AND col_name IS NOT '" SENTINEL_CID "'",
       esc);
   sqlite3_free(esc);
   return lazy_prepare(db, &tblInfo->pZeroClocksOnResurrectStmt, sql, ppStmt);
@@ -729,7 +729,7 @@ int crsql_get_mark_locally_deleted_stmt(sqlite3 *db, crsql_TableInfo *tblInfo,
   char *sql = sqlite3_mprintf(
       "INSERT INTO \"%s__crsql_clock\" ("
       "key, col_name, col_version, db_version, seq, site_id"
-      ") SELECT ?, '" DELETE_SENTINEL "', 2, ?, ?, 0 WHERE true"
+      ") SELECT ?, '" SENTINEL_CID "', 2, ?, ?, 0 WHERE true"
       " ON CONFLICT DO UPDATE SET"
       " col_version = 1 + col_version,"
       " db_version = ?,"
@@ -749,7 +749,7 @@ int crsql_get_move_non_sentinels_stmt(sqlite3 *db, crsql_TableInfo *tblInfo,
   char *esc = crsql_escape_ident(tblInfo->tblName);
   char *sql = sqlite3_mprintf(
       "UPDATE OR REPLACE \"%s__crsql_clock\" SET key = ? WHERE key = ?"
-      " AND col_name != '" DELETE_SENTINEL "'",
+      " AND col_name != '" SENTINEL_CID "'",
       esc);
   sqlite3_free(esc);
   return lazy_prepare(db, &tblInfo->pMoveNonSentinelsStmt, sql, ppStmt);
@@ -765,7 +765,7 @@ int crsql_get_mark_locally_created_stmt(sqlite3 *db, crsql_TableInfo *tblInfo,
   char *sql = sqlite3_mprintf(
       "INSERT INTO \"%s__crsql_clock\" ("
       "key, col_name, col_version, db_version, seq, site_id"
-      ") SELECT ?, '" INSERT_SENTINEL "', 1, ?, ?, 0 WHERE true"
+      ") SELECT ?, '" SENTINEL_CID "', 1, ?, ?, 0 WHERE true"
       " ON CONFLICT DO UPDATE SET"
       " col_version = CASE col_version %% 2 WHEN 0 THEN col_version + 1 ELSE col_version + 2 END,"
       " db_version = ?,"

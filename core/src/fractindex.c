@@ -1533,7 +1533,7 @@ static int fract_fix_conflict_return_old_key(sqlite3_context *ctx,
     if (i == 0) {
       pk_predicates = sqlite3_mprintf("\"%w\" = ?%d", pk_names[i], i + 1);
     } else {
-      pk_predicates = sqlite3_mprintf("%s, AND\"%w\" = ?%d", old, pk_names[i],
+      pk_predicates = sqlite3_mprintf("%s AND \"%w\" = ?%d", old, pk_names[i],
                                       i + 1);
     }
     sqlite3_free(old);

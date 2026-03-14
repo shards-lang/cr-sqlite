@@ -27,9 +27,10 @@
 #define MAX_TBL_NAME_LEN 2048
 #define SITE_ID_LEN 16
 
-// Sentinel column names used in clock tables
-#define INSERT_SENTINEL "-1"
-#define DELETE_SENTINEL "-1"
+// Sentinel column name used in clock tables for row create/delete events.
+// The same cid value is used for both inserts and deletes; the distinction
+// is made by causal length parity (odd = alive, even = deleted).
+#define SENTINEL_CID "-1"
 
 // Row types for changes virtual table
 #define ROW_TYPE_UPDATE 0

@@ -301,6 +301,10 @@ int crsql_compare_sqlite_values(sqlite3_value *l, sqlite3_value *r) {
       int rLen = sqlite3_value_bytes(r);
       const void *lBlob = sqlite3_value_blob(l);
       const void *rBlob = sqlite3_value_blob(r);
+      if (!lBlob || !rBlob) {
+        if (lBlob == rBlob) return 0;
+        return lBlob ? 1 : -1;
+      }
       int minLen = lLen < rLen ? lLen : rLen;
       int cmp = memcmp(lBlob, rBlob, minLen);
       if (cmp != 0) {
@@ -329,6 +333,10 @@ int crsql_compare_sqlite_values(sqlite3_value *l, sqlite3_value *r) {
     case SQLITE_TEXT: {
       const char *lT = (const char *)sqlite3_value_text(l);
       const char *rT = (const char *)sqlite3_value_text(r);
+      if (!lT || !rT) {
+        if (lT == rT) return 0;
+        return lT ? 1 : -1;
+      }
       return strcmp(lT, rT);
     }
   }

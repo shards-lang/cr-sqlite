@@ -71,10 +71,9 @@ int crsql_create_clock_table(sqlite3 *db, crsql_TableInfo *tableInfo,
     return rc;
   }
 
-  // Create pks table (using raw tblName for the table name, escName for safety
-  // in identifiers)
+  // Create pks table
   sql = sqlite3_mprintf(
-      "CREATE TABLE IF NOT EXISTS \"%s__crsql_pks\""
+      "CREATE TABLE IF NOT EXISTS \"%w__crsql_pks\""
       " (__crsql_key INTEGER PRIMARY KEY, %s)",
       tableInfo->tblName, pkList);
   if (!sql) {
@@ -92,8 +91,8 @@ int crsql_create_clock_table(sqlite3 *db, crsql_TableInfo *tableInfo,
 
   // Create unique index on pks
   sql = sqlite3_mprintf(
-      "CREATE UNIQUE INDEX IF NOT EXISTS \"%s__crsql_pks_pks\""
-      " ON \"%s__crsql_pks\" (%s)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS \"%w__crsql_pks_pks\""
+      " ON \"%w__crsql_pks\" (%s)",
       tableInfo->tblName, tableInfo->tblName, pkList);
   sqlite3_free(escName);
   sqlite3_free(pkList);
@@ -243,7 +242,7 @@ static int create_clock_rows_from_stmt(sqlite3_stmt *readStmt, sqlite3 *db,
         sqlite3_reset(writeStmt);
       }
     } else {
-      sqlite3_bind_text(writeStmt, 2, INSERT_SENTINEL, -1, SQLITE_STATIC);
+      sqlite3_bind_text(writeStmt, 2, SENTINEL_CID, -1, SQLITE_STATIC);
       sqlite3_step(writeStmt);
       sqlite3_reset(writeStmt);
     }
