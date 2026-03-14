@@ -25,6 +25,8 @@ void crsqlIsCrrTestSuite();
 void rowsImpactedTestSuite();
 void crsqlChangesVtabRowidTestSuite();
 void crsqlSandboxSuite();
+void crsqlPackColumnsTestSuite();
+void crsqlUtilTestSuite();
 int main(int argc, char *argv[]) {
   char *suite = "all";
   if (argc == 2) {
@@ -39,6 +41,8 @@ int main(int argc, char *argv[]) {
   SUITE("rows_impacted") rowsImpactedTestSuite();
   SUITE("rowid") crsqlChangesVtabRowidTestSuite();
   SUITE("sandbox") crsqlSandboxSuite();
+  SUITE("pack") crsqlPackColumnsTestSuite();
+  SUITE("util") crsqlUtilTestSuite();
 
   sqlite3_shutdown();
 }
