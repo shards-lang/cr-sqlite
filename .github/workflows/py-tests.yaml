@@ -25,9 +25,15 @@ jobs:
           cd core
           make loadable
 
-      - uses: actions/setup-python@v5
+      - uses: conda-incubator/setup-miniconda@v2
         with:
+          auto-update-conda: true
+          auto-activate-base: true
+          activate-environment: ""
           python-version: "3.12"
+
+      - name: Install SQLite with extension support
+        run: conda install -y sqlite
 
       - name: Install test dependencies
         run: |
