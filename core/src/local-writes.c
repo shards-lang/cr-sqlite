@@ -164,7 +164,7 @@ static int update_create_record(sqlite3 *db, crsql_TableInfo *tblInfo,
   if (rc == SQLITE_OK) rc = sqlite3_bind_int(pStmt, 2, seq);
   if (rc == SQLITE_OK) rc = sqlite3_bind_int64(pStmt, 3, newKey);
   if (rc == SQLITE_OK)
-    rc = sqlite3_bind_text(pStmt, 4, INSERT_SENTINEL, -1, SQLITE_STATIC);
+    rc = sqlite3_bind_text(pStmt, 4, SENTINEL_CID, -1, SQLITE_STATIC);
   if (rc != SQLITE_OK) {
     reset_cached_stmt(pStmt);
     *errOut = "failed binding to update_create_record_stmt";

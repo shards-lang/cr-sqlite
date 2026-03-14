@@ -83,22 +83,8 @@ static int changesOpen(sqlite3_vtab *p, sqlite3_vtab_cursor **ppCursor) {
   return SQLITE_OK;
 }
 
-static int changesCrsrFinalize(crsql_Changes_cursor *crsr) {
-  // Assign pointers to null after freeing
-  // since we can get into this twice for the same cursor object.
-  int rc = SQLITE_OK;
-  rc += sqlite3_finalize(crsr->pChangesStmt);
-  crsr->pChangesStmt = 0;
-  if (crsr->pRowStmt != 0) {
-    rc += sqlite3_clear_bindings(crsr->pRowStmt);
-    rc += sqlite3_reset(crsr->pRowStmt);
-  }
-  crsr->pRowStmt = 0;
-
-  crsr->dbVersion = MIN_POSSIBLE_DB_VERSION;
-
-  return rc;
-}
+// Defined in changes-vtab-impl.c
+int changesCrsrFinalize(crsql_Changes_cursor *crsr);
 
 /**
  * Called to reclaim all of the resources allocated in `changesOpen`

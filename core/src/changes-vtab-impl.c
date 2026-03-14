@@ -50,7 +50,7 @@ static int resetCachedStmt(sqlite3_stmt *pStmt) {
   return sqlite3_reset(pStmt);
 }
 
-static int changesCrsrFinalize(crsql_Changes_cursor *crsr) {
+int changesCrsrFinalize(crsql_Changes_cursor *crsr) {
   int rc = SQLITE_OK;
   rc += sqlite3_finalize(crsr->pChangesStmt);
   crsr->pChangesStmt = 0;
@@ -104,7 +104,7 @@ static char *changes_query_for_table(crsql_TableInfo *tblInfo) {
       " LEFT JOIN \"%s__crsql_clock\" AS t2 ON"
       " t1.key = t2.key AND t2.col_name = '%s'",
       escaped_tbl_val, pk_list, escaped_tbl_name, escaped_tbl_name,
-      escaped_tbl_name, INSERT_SENTINEL);
+      escaped_tbl_name, SENTINEL_CID);
 
   sqlite3_free(pk_list);
   sqlite3_free(escaped_tbl_name);
@@ -309,7 +309,6 @@ int crsql_changes_best_index(sqlite3_vtab *tab, sqlite3_index_info *pIdxInfo) {
   }
 
   // ORDER BY
-  int desc = 0;
   int orderByConsumed = 1;
   if (pIdxInfo->nOrderBy > 0) {
     APPEND_STR(" ORDER BY ");
@@ -319,7 +318,6 @@ int crsql_changes_best_index(sqlite3_vtab *tab, sqlite3_index_info *pIdxInfo) {
 
   int firstOrder = 1;
   for (int i = 0; i < pIdxInfo->nOrderBy; i++) {
-    desc = pIdxInfo->aOrderBy[i].desc;
     const char *colName =
         get_clock_table_col_name(pIdxInfo->aOrderBy[i].iColumn);
     if (colName) {
@@ -329,16 +327,13 @@ int crsql_changes_best_index(sqlite3_vtab *tab, sqlite3_index_info *pIdxInfo) {
         APPEND_STR(", ");
       }
       APPEND_STR(colName);
+      if (pIdxInfo->aOrderBy[i].desc) {
+        APPEND_STR(" DESC");
+      } else {
+        APPEND_STR(" ASC");
+      }
     } else {
       orderByConsumed = 0;
-    }
-  }
-
-  if (pIdxInfo->nOrderBy > 0) {
-    if (desc) {
-      APPEND_STR(" DESC");
-    } else {
-      APPEND_STR(" ASC");
     }
   }
 
@@ -487,11 +482,17 @@ static int changes_next_impl(crsql_Changes_cursor *cursor,
     return SQLITE_ERROR;
   }
 
-  if (strcmp(cid, DELETE_SENTINEL) == 0) {
-    cursor->rowType = ROW_TYPE_DELETE;
-    return SQLITE_OK;
-  } else if (strcmp(cid, INSERT_SENTINEL) == 0) {
-    cursor->rowType = ROW_TYPE_PKONLY;
+  if (!cid) {
+    vtab->zErrMsg = sqlite3_mprintf("out of memory reading cid");
+    return SQLITE_NOMEM;
+  }
+
+  if (strcmp(cid, SENTINEL_CID) == 0) {
+    // Sentinel row: use CL parity to distinguish delete vs pk-only insert.
+    // Even CL = deleted, odd CL = alive (pk-only insert).
+    sqlite3_int64 cl =
+        sqlite3_column_int64(cursor->pChangesStmt, CLOCK_COL_CL);
+    cursor->rowType = (cl % 2 == 0) ? ROW_TYPE_DELETE : ROW_TYPE_PKONLY;
     return SQLITE_OK;
   } else {
     cursor->rowType = ROW_TYPE_UPDATE;
@@ -581,15 +582,15 @@ int crsql_changes_column(sqlite3_vtab_cursor *cur, sqlite3_context *ctx,
     case CHANGES_COL_CID:
       switch (cursor->rowType) {
         case ROW_TYPE_PKONLY:
-          sqlite3_result_text(ctx, INSERT_SENTINEL, -1, SQLITE_STATIC);
+          sqlite3_result_text(ctx, SENTINEL_CID, -1, SQLITE_STATIC);
           break;
         case ROW_TYPE_DELETE:
-          sqlite3_result_text(ctx, DELETE_SENTINEL, -1, SQLITE_STATIC);
+          sqlite3_result_text(ctx, SENTINEL_CID, -1, SQLITE_STATIC);
           break;
         case ROW_TYPE_UPDATE:
           if (cursor->pRowStmt == 0) {
             // Row data is missing -- report as delete
-            sqlite3_result_text(ctx, DELETE_SENTINEL, -1, SQLITE_STATIC);
+            sqlite3_result_text(ctx, SENTINEL_CID, -1, SQLITE_STATIC);
           } else {
             sqlite3_result_value(
                 ctx, sqlite3_column_value(changesStmt, CLOCK_COL_CID));
@@ -987,7 +988,7 @@ static int merge_sentinel_only_insert(
   rc = zero_clocks_on_resurrect(db, tblInfo, key, remoteDbVsn);
   if (rc != SQLITE_OK) return rc;
 
-  return set_winner_clock(db, extData, tblInfo, key, INSERT_SENTINEL,
+  return set_winner_clock(db, extData, tblInfo, key, SENTINEL_CID,
                           remoteColVrsn, remoteDbVsn, remoteSiteId,
                           remoteSiteIdLen, remoteSeq, outRowid);
 }
@@ -1037,7 +1038,7 @@ static int merge_delete(sqlite3 *db, crsql_ExtData *extData,
   }
 
   // Set winner clock for the delete sentinel
-  rc = set_winner_clock(db, extData, tblInfo, key, DELETE_SENTINEL,
+  rc = set_winner_clock(db, extData, tblInfo, key, SENTINEL_CID,
                         remoteColVrsn, remoteDbVrsn, remoteSiteId,
                         remoteSiteIdLen, remoteSeq, outRowid);
   if (rc != SQLITE_OK) return rc;
@@ -1113,6 +1114,10 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
     return SQLITE_ERROR;
   }
   const char *insertCol = (const char *)sqlite3_value_text(insertColVal);
+  if (!insertCol) {
+    *errmsg = sqlite3_mprintf("crsql - cid column must not be null");
+    return SQLITE_ERROR;
+  }
 
   sqlite3_value *insertVal = argv[2 + CHANGES_COL_CVAL];
   sqlite3_int64 insertColVrsn =
@@ -1233,7 +1238,7 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
   int isDelete = (insertCl % 2 == 0);
   int needsResurrect = (insertCl > localCl && insertCl % 2 == 1);
   int rowExistsLocally = (localCl != 0);
-  int isSentinelOnly = (strcmp(insertCol, INSERT_SENTINEL) == 0);
+  int isSentinelOnly = (strcmp(insertCol, SENTINEL_CID) == 0);
 
   // Handle delete
   if (isDelete) {

@@ -220,7 +220,7 @@ crsql_ColumnValue *crsql_unpack_columns(const unsigned char *data, int dataLen,
         if (pos + intLen > dataLen) goto error;
         int blobLen = (int)get_int(data + pos, intLen);
         pos += intLen;
-        if (pos + blobLen > dataLen) goto error;
+        if (blobLen < 0 || blobLen > dataLen - pos) goto error;
         values[i].type = CRSQL_CV_BLOB;
         values[i].v.blob.data = sqlite3_malloc(blobLen);
         if (values[i].v.blob.data == 0) goto error;
@@ -251,7 +251,7 @@ crsql_ColumnValue *crsql_unpack_columns(const unsigned char *data, int dataLen,
         if (pos + intLen > dataLen) goto error;
         int textLen = (int)get_int(data + pos, intLen);
         pos += intLen;
-        if (pos + textLen > dataLen) goto error;
+        if (textLen < 0 || textLen > dataLen - pos) goto error;
         values[i].type = CRSQL_CV_TEXT;
         values[i].v.text.data = sqlite3_malloc(textLen + 1);
         if (values[i].v.text.data == 0) goto error;

@@ -11,6 +11,7 @@ void crsql_drop_table_info_vec(crsql_ExtData *pExtData);
 
 crsql_ExtData *crsql_newExtData(sqlite3 *db, unsigned char *siteIdBuffer) {
   crsql_ExtData *pExtData = sqlite3_malloc(sizeof *pExtData);
+  if (!pExtData) return 0;
 
   pExtData->siteId = siteIdBuffer;
 
@@ -81,6 +82,7 @@ crsql_ExtData *crsql_newExtData(sqlite3 *db, unsigned char *siteIdBuffer) {
         pExtData->mergeEqualValues = value;
       } else {
         // broken setting...
+        sqlite3_finalize(pStmt);
         crsql_freeExtData(pExtData);
         return 0;
       }
