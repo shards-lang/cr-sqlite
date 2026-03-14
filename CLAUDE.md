@@ -8,6 +8,13 @@ cr-sqlite is a SQLite extension that adds CRDT-based multi-master replication. I
 
 ```bash
 cd core
+
+# CMake (preferred)
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+cd build && ctest --output-on-failure    # run C unit tests
+
+# Make (still works)
 make loadable    # builds dist/crsqlite.[dylib|so|dll]
 make sqlite3     # builds dist/sqlite3 with extension built in
 make test        # builds and runs C unit tests
@@ -15,7 +22,7 @@ make asan        # runs with AddressSanitizer
 make valgrind    # runs under valgrind (Linux)
 ```
 
-No Rust toolchain, no Cargo, no special dependencies. Just a C compiler and make.
+No Rust toolchain, no Cargo, no special dependencies. Just a C compiler and CMake (or Make).
 
 ## Test
 

@@ -13,11 +13,11 @@ jobs:
           - os: ubuntu-latest
           - os: macos-latest
     steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: true
+      - uses: actions/checkout@v4
 
-      - name: Test
+      - name: Build and test
         run: |
           cd core
-          make test
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+          cd build && ctest --output-on-failure

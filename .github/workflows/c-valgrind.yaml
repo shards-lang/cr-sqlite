@@ -5,26 +5,21 @@ on:
 name: "c-valgrind"
 jobs:
   build:
-    name: Valgrind on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
+    name: Valgrind
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: true
+      - uses: actions/checkout@v4
 
       - name: Install valgrind
         run: sudo apt update && sudo apt install -y valgrind
 
-      - name: Build tests
+      - name: Build
         run: |
           cd core
-          make test
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
 
       - name: Run under valgrind
         run: |
-          cd core
-          valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 -s dist/test
+          cd core/build
+          valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 -s ./crsqlite_test

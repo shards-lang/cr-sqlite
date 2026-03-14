@@ -9,13 +9,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - name: Build loadable extension
         run: |
           cd core
-          make loadable
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target crsqlite
+          mkdir -p dist && cp build/crsqlite.so dist/crsqlite.so
 
       - uses: actions/setup-python@v5
         with:

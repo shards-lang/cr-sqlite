@@ -13,20 +13,25 @@ This is a fork of [vlcn-io/cr-sqlite](https://github.com/vlcn-io/cr-sqlite), rew
 
 ## Building
 
-Requires only a C compiler. No Rust, no Cargo, no nightly toolchains.
+Requires only a C compiler and CMake (>= 3.16). No Rust, no Cargo, no nightly toolchains.
 
 ```bash
-git clone --recurse-submodules git@github.com:shards-lang/cr-sqlite.git
+git clone git@github.com:shards-lang/cr-sqlite.git
 cd cr-sqlite/core
-make loadable
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 ```
 
-This produces `dist/crsqlite.[dylib|so|dll]` — a loadable SQLite extension.
+This produces:
+- `build/crsqlite.[dylib|so|dll]` — loadable SQLite extension
+- `build/sqlite3` — SQLite CLI with cr-sqlite built in
+- `build/libcrsqlite_static.a` — static library
 
-To build a `sqlite3` CLI with cr-sqlite built in:
+Or using Make directly:
 
 ```bash
-make sqlite3
+cd cr-sqlite/core
+make loadable
 ```
 
 ## Usage
@@ -153,17 +158,23 @@ Tables upgraded to CRRs must:
 ## Tests
 
 ```bash
-# C unit tests
-cd core && make test
+# C unit tests (via CMake)
+cd core
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+cd build && ctest --output-on-failure
 
 # Python correctness tests (148 tests)
-cd core && make loadable
+cd core
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target crsqlite
+mkdir -p dist && cp build/crsqlite.* dist/
 cd ../py/correctness
 pip install pytest hypothesis
 pip install -e .
 pytest
 
-# Memory checks
+# Memory checks (via Make)
 cd core && make valgrind
 cd core && make asan
 ```
