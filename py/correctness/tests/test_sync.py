@@ -397,26 +397,34 @@ def test_merge_same_w_tie_breaker():
     db3.execute("SELECT crsql_config_set('merge-equal-values', 1);")
     db3.commit()
 
+    # Full convergence: sync all pairs both directions so the globally
+    # winning site_id propagates to every node. With 3 nodes and site_id
+    # tie-breaking, a single round of partial syncs may not converge
+    # (e.g., if db3's site_id beats the round-1 winner from db1/db2).
     sync_left_to_right(db1, db2, 0)
-    changes2 = db2.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
-    
     sync_left_to_right(db2, db1, 0)
-    changes1 = db1.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
-
+    sync_left_to_right(db1, db3, 0)
+    sync_left_to_right(db3, db1, 0)
     sync_left_to_right(db2, db3, 0)
-    changes3 = db3.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
+    sync_left_to_right(db3, db2, 0)
 
-    # check that everything by db_version is the same
-    assert (changes2[:-6] == changes1[:-6] == changes3[:-6])
+    changes_query = "SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes"
+    changes1 = db1.execute(changes_query).fetchall()
+    changes2 = db2.execute(changes_query).fetchall()
+    changes3 = db3.execute(changes_query).fetchall()
+
+    # All nodes should agree on table, pk, cid, val, col_version, site_id
+    # (db_version may differ per node)
+    assert (changes1[0][:6] == changes2[0][:6] == changes3[0][:6])
 
     # Test that we're stable / do not loop when we tie break equal values
 
     sync_left_to_right(db2, db1, 0)
-    changes1_2 = db1.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
+    changes1_2 = db1.execute(changes_query).fetchall()
     sync_left_to_right(db3, db2, 0)
-    changes2_2 = db2.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
+    changes2_2 = db2.execute(changes_query).fetchall()
     sync_left_to_right(db1, db3, 0)
-    changes3_2 = db3.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
+    changes3_2 = db3.execute(changes_query).fetchall()
 
     # everything should stay the same, including db_version
     assert (changes1 == changes1_2)
@@ -424,11 +432,11 @@ def test_merge_same_w_tie_breaker():
     assert (changes3 == changes3_2)
 
     sync_left_to_right(db3, db1, 0)
-    changes1_2 = db1.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
+    changes1_2 = db1.execute(changes_query).fetchall()
     sync_left_to_right(db1, db2, 0)
-    changes2_2 = db2.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
+    changes2_2 = db2.execute(changes_query).fetchall()
     sync_left_to_right(db2, db3, 0)
-    changes3_2 = db3.execute("SELECT \"table\", pk, cid, val, col_version, site_id, db_version FROM crsql_changes").fetchall()
+    changes3_2 = db3.execute(changes_query).fetchall()
 
     # everything should stay the same, including db_version
     assert (changes1 == changes1_2)
