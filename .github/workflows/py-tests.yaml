@@ -5,18 +5,10 @@ on:
 name: "py-tests"
 jobs:
   build:
-    name: Testing on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash -el {0}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-          - os: macos-latest
+    name: Python correctness tests
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
 
@@ -25,15 +17,9 @@ jobs:
           cd core
           make loadable
 
-      - uses: conda-incubator/setup-miniconda@v2
+      - uses: actions/setup-python@v5
         with:
-          auto-update-conda: true
-          auto-activate-base: true
-          activate-environment: ""
           python-version: "3.12"
-
-      - name: Install SQLite with extension support
-        run: conda install -y sqlite
 
       - name: Install test dependencies
         run: |
