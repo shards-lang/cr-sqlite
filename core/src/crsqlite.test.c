@@ -610,31 +610,274 @@ static void testPullingOnlyLocalChanges() {
   printf("\t\e[0;32mSuccess\e[0m\n");
 }
 
-// static void testModifySinglePK()
-// {
-// }
+static void testSyncBit() {
+  printf("SyncBit\n");
+  int rc = SQLITE_OK;
+  sqlite3 *db;
+  sqlite3_stmt *pStmt = 0;
 
-// static void testModifyCompoundPK()
-// {
-// }
+  rc = sqlite3_open(":memory:", &db);
+  rc += sqlite3_exec(
+      db, "CREATE TABLE foo (a primary key not null, b)", 0, 0, 0);
+  rc += sqlite3_exec(db, "SELECT crsql_as_crr('foo')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+
+  // Set sync bit — triggers should NOT fire
+  rc = sqlite3_exec(db, "SELECT crsql_internal_sync_bit(1)", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  rc = sqlite3_exec(db, "INSERT INTO foo VALUES (1, 'hello')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+
+  // Check clock table — should have NO entries because sync bit suppresses
+  rc = sqlite3_prepare_v2(
+      db, "SELECT count(*) FROM foo__crsql_clock", -1, &pStmt, 0);
+  assert(rc == SQLITE_OK);
+  rc = sqlite3_step(pStmt);
+  assert(rc == SQLITE_ROW);
+  assert(sqlite3_column_int(pStmt, 0) == 0);
+  sqlite3_finalize(pStmt);
+
+  // Clear sync bit — triggers should fire
+  rc = sqlite3_exec(db, "SELECT crsql_internal_sync_bit(0)", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  rc = sqlite3_exec(db, "INSERT INTO foo VALUES (2, 'world')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+
+  // Clock table should now have entries for row 2
+  rc = sqlite3_prepare_v2(
+      db, "SELECT count(*) FROM foo__crsql_clock", -1, &pStmt, 0);
+  assert(rc == SQLITE_OK);
+  rc = sqlite3_step(pStmt);
+  assert(rc == SQLITE_ROW);
+  assert(sqlite3_column_int(pStmt, 0) > 0);
+  sqlite3_finalize(pStmt);
+
+  crsql_close(db);
+  printf("\t\e[0;32mSuccess\e[0m\n");
+}
+
+static void testDbVersion() {
+  printf("DbVersion\n");
+  int rc = SQLITE_OK;
+  sqlite3 *db;
+
+  rc = sqlite3_open(":memory:", &db);
+  rc += sqlite3_exec(
+      db, "CREATE TABLE foo (a primary key not null, b)", 0, 0, 0);
+  rc += sqlite3_exec(db, "SELECT crsql_as_crr('foo')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+
+  sqlite3_int64 v0 = getDbVersion(db);
+  // Fresh db with CRR but no data — version should be 0
+  assert(v0 == 0);
+
+  // Insert in first transaction
+  rc = sqlite3_exec(db, "INSERT INTO foo VALUES (1, 'a')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  sqlite3_int64 v1 = getDbVersion(db);
+  assert(v1 > v0);
+
+  // Insert in second transaction
+  rc = sqlite3_exec(db, "INSERT INTO foo VALUES (2, 'b')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  sqlite3_int64 v2 = getDbVersion(db);
+  assert(v2 > v1);
+
+  // Insert in third transaction
+  rc = sqlite3_exec(db, "INSERT INTO foo VALUES (3, 'c')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  sqlite3_int64 v3 = getDbVersion(db);
+  assert(v3 > v2);
+
+  // Monotonically increasing
+  assert(v3 > v2 && v2 > v1 && v1 > v0);
+
+  crsql_close(db);
+  printf("\t\e[0;32mSuccess\e[0m\n");
+}
+
+static void testSiteId() {
+  printf("SiteId\n");
+  int rc = SQLITE_OK;
+  sqlite3 *db1;
+  sqlite3 *db2;
+  sqlite3_stmt *pStmt1 = 0;
+  sqlite3_stmt *pStmt2 = 0;
+
+  rc = sqlite3_open(":memory:", &db1);
+  rc += sqlite3_open(":memory:", &db2);
+  rc += sqlite3_exec(
+      db1, "CREATE TABLE foo (a primary key not null, b)", 0, 0, 0);
+  rc += sqlite3_exec(db1, "SELECT crsql_as_crr('foo')", 0, 0, 0);
+  rc += sqlite3_exec(
+      db2, "CREATE TABLE foo (a primary key not null, b)", 0, 0, 0);
+  rc += sqlite3_exec(db2, "SELECT crsql_as_crr('foo')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+
+  // Site ID should be a 16-byte blob
+  rc = sqlite3_prepare_v2(db1, "SELECT crsql_site_id()", -1, &pStmt1, 0);
+  assert(rc == SQLITE_OK);
+  rc = sqlite3_step(pStmt1);
+  assert(rc == SQLITE_ROW);
+  assert(sqlite3_column_type(pStmt1, 0) == SQLITE_BLOB);
+  assert(sqlite3_column_bytes(pStmt1, 0) == SITE_ID_LEN);
+  const void *sid1 = sqlite3_column_blob(pStmt1, 0);
+
+  // Should be stable across calls within same connection
+  sqlite3_stmt *pStmt1b = 0;
+  rc = sqlite3_prepare_v2(db1, "SELECT crsql_site_id()", -1, &pStmt1b, 0);
+  assert(rc == SQLITE_OK);
+  rc = sqlite3_step(pStmt1b);
+  assert(rc == SQLITE_ROW);
+  assert(memcmp(sid1, sqlite3_column_blob(pStmt1b, 0), SITE_ID_LEN) == 0);
+  sqlite3_finalize(pStmt1b);
+
+  // Different DB should have different site ID
+  rc = sqlite3_prepare_v2(db2, "SELECT crsql_site_id()", -1, &pStmt2, 0);
+  assert(rc == SQLITE_OK);
+  rc = sqlite3_step(pStmt2);
+  assert(rc == SQLITE_ROW);
+  assert(sqlite3_column_bytes(pStmt2, 0) == SITE_ID_LEN);
+  assert(memcmp(sid1, sqlite3_column_blob(pStmt2, 0), SITE_ID_LEN) != 0);
+
+  sqlite3_finalize(pStmt1);
+  sqlite3_finalize(pStmt2);
+  crsql_close(db1);
+  crsql_close(db2);
+  printf("\t\e[0;32mSuccess\e[0m\n");
+}
+
+static void testRequiredPrimaryKey() {
+  printf("RequiredPrimaryKey\n");
+  int rc = SQLITE_OK;
+  sqlite3 *db;
+  char *err = 0;
+
+  rc = sqlite3_open(":memory:", &db);
+  // Table with no explicit primary key (rowid only)
+  rc += sqlite3_exec(db, "CREATE TABLE nopk (a, b)", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+
+  // crsql_as_crr should fail on a table without an explicit PK
+  rc = sqlite3_exec(db, "SELECT crsql_as_crr('nopk')", 0, 0, &err);
+  assert(rc != SQLITE_OK);
+  if (err) {
+    sqlite3_free(err);
+  }
+
+  crsql_close(db);
+  printf("\t\e[0;32mSuccess\e[0m\n");
+}
+
+static void testModifySinglePK() {
+  printf("ModifySinglePK\n");
+  int rc = SQLITE_OK;
+  sqlite3 *db;
+  sqlite3_stmt *pStmt = 0;
+
+  rc = sqlite3_open(":memory:", &db);
+  rc += sqlite3_exec(
+      db, "CREATE TABLE foo (a primary key not null, b)", 0, 0, 0);
+  rc += sqlite3_exec(db, "SELECT crsql_as_crr('foo')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+
+  // Insert a row
+  rc = sqlite3_exec(db, "INSERT INTO foo VALUES (1, 'hello')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  sqlite3_int64 v1 = getDbVersion(db);
+
+  // Update PK: old row should be deleted, new row created
+  rc = sqlite3_exec(db, "UPDATE foo SET a = 2 WHERE a = 1", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  sqlite3_int64 v2 = getDbVersion(db);
+  assert(v2 > v1);
+
+  // Old row should not exist
+  rc = sqlite3_prepare_v2(
+      db, "SELECT count(*) FROM foo WHERE a = 1", -1, &pStmt, 0);
+  sqlite3_step(pStmt);
+  assert(sqlite3_column_int(pStmt, 0) == 0);
+  sqlite3_finalize(pStmt);
+
+  // New row should exist
+  rc = sqlite3_prepare_v2(
+      db, "SELECT b FROM foo WHERE a = 2", -1, &pStmt, 0);
+  rc = sqlite3_step(pStmt);
+  assert(rc == SQLITE_ROW);
+  assert(strcmp((const char *)sqlite3_column_text(pStmt, 0), "hello") == 0);
+  sqlite3_finalize(pStmt);
+
+  // Old key should have a delete sentinel (even CL) in clock table
+  rc = sqlite3_prepare_v2(
+      db,
+      "SELECT col_version FROM foo__crsql_clock WHERE key = 1 AND "
+      "col_name = '" SENTINEL_CID "'",
+      -1, &pStmt, 0);
+  rc = sqlite3_step(pStmt);
+  assert(rc == SQLITE_ROW);
+  // CL should be even (deleted)
+  sqlite3_int64 cl = sqlite3_column_int64(pStmt, 0);
+  assert(cl % 2 == 0);
+  sqlite3_finalize(pStmt);
+
+  crsql_close(db);
+  printf("\t\e[0;32mSuccess\e[0m\n");
+}
+
+static void testModifyCompoundPK() {
+  printf("ModifyCompoundPK\n");
+  int rc = SQLITE_OK;
+  sqlite3 *db;
+  sqlite3_stmt *pStmt = 0;
+
+  rc = sqlite3_open(":memory:", &db);
+  rc += sqlite3_exec(
+      db, "CREATE TABLE bar (a not null, b not null, c, PRIMARY KEY (a, b))",
+      0, 0, 0);
+  rc += sqlite3_exec(db, "SELECT crsql_as_crr('bar')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+
+  // Insert a row
+  rc = sqlite3_exec(db, "INSERT INTO bar VALUES (1, 2, 'data')", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  sqlite3_int64 v1 = getDbVersion(db);
+
+  // Modify one PK column
+  rc = sqlite3_exec(db, "UPDATE bar SET b = 3 WHERE a = 1 AND b = 2", 0, 0, 0);
+  assert(rc == SQLITE_OK);
+  sqlite3_int64 v2 = getDbVersion(db);
+  assert(v2 > v1);
+
+  // Old row gone, new row exists
+  rc = sqlite3_prepare_v2(
+      db, "SELECT count(*) FROM bar WHERE a = 1 AND b = 2", -1, &pStmt, 0);
+  sqlite3_step(pStmt);
+  assert(sqlite3_column_int(pStmt, 0) == 0);
+  sqlite3_finalize(pStmt);
+
+  rc = sqlite3_prepare_v2(
+      db, "SELECT c FROM bar WHERE a = 1 AND b = 3", -1, &pStmt, 0);
+  rc = sqlite3_step(pStmt);
+  assert(rc == SQLITE_ROW);
+  assert(strcmp((const char *)sqlite3_column_text(pStmt, 0), "data") == 0);
+  sqlite3_finalize(pStmt);
+
+  crsql_close(db);
+  printf("\t\e[0;32mSuccess\e[0m\n");
+}
 
 void crsqlTestSuite() {
   printf("\e[47m\e[1;30mSuite: crsql\e[0m\n");
 
-  // testCreateClockTable();
   teste2e();
   testSelectChangesAfterChangingColumnName();
-  // testInsertChangesWithUnkownColumnNames();
   testLamportCondition();
   noopsDoNotMoveClocks();
   testPullingOnlyLocalChanges();
-
-  // testIdempotence();
-  // testColumnAdds();
-  // testColumnDrops();
-  // testRecreateCrrFromExisting();
-  // testRequiredPrimaryKey();
-  // testSyncBit();
-  // testDbVersion();
-  // testSiteId();
+  testSyncBit();
+  testDbVersion();
+  testSiteId();
+  testRequiredPrimaryKey();
+  testModifySinglePK();
+  testModifyCompoundPK();
 }
