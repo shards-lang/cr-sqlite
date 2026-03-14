@@ -1,5 +1,7 @@
 on:
   pull_request:
+  push:
+    branches: [pure-c-port]
 name: "py-tests"
 jobs:
   build:
@@ -18,37 +20,21 @@ jobs:
         with:
           submodules: true
 
-      - name: Load .env file
-        uses: xom9ikk/dotenv@v2
-        with:
-          path: ./
-
-      - name: Make loadable
+      - name: Build loadable extension
         run: |
           cd core
           make loadable
 
-      - uses: conda-incubator/setup-miniconda@v2
+      - uses: actions/setup-python@v5
         with:
-          auto-update-conda: true
-          auto-activate-base: true
-          activate-environment: anaconda-client-env
-          python-version: "3.10"
+          python-version: "3.12"
 
-      - name: Install SQLite
-        run: conda install sqlite
-
-      - name: Check SQLite Version
-        run: echo "import sqlite3; print(sqlite3.sqlite_version)" | python
-
-      # - name: Install Python
-      #   uses: actions/setup-python@v4
-      #   with:
-      #     python-version: "3.10"
-
-      - name: Install pip
+      - name: Install test dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install pytest hypothesis
+          cd py/correctness && pip install -e .
 
       - name: Test
-        run: cd py/correctness && ./install-and-test.sh
+        run: |
+          cd py/correctness
+          pytest -v

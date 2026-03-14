@@ -2,22 +2,21 @@ on:
   pull_request:
   push:
     branches: [pure-c-port]
-name: "c-tests"
+name: "c-asan"
 jobs:
   build:
-    name: Testing on ${{ matrix.os }}
+    name: AddressSanitizer on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-          - os: macos-latest
     steps:
       - uses: actions/checkout@v3
         with:
           submodules: true
 
-      - name: Test
+      - name: Build and run with ASAN
         run: |
           cd core
-          make test
+          make asan

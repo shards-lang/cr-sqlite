@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 #include "crsqlite.h"
-#include "rust.h"
+#include "bootstrap.h"
 
 int crsql_close(sqlite3 *db);
 int syncLeftToRight(sqlite3 *db1, sqlite3 *db2, sqlite3_int64 since);

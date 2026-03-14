@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 #include "crsqlite.h"
-#include "rust.h"
+#include "bootstrap.h"
 
 int crsql_close(sqlite3 *db);
 

@@ -6,7 +6,10 @@
 #include <string.h>
 
 #include "consts.h"
-#include "rust.h"
+#include "bootstrap.h"
+#include "crr.h"
+#include "db-version.h"
+#include "tableinfo.h"
 
 #ifndef CHECK_OK
 #define CHECK_OK         \
