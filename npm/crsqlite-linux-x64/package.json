@@ -1,5 +1,5 @@
 {
-  "name": "@anthropic/crsqlite-linux-x64",
+  "name": "@shards-lang/crsqlite-linux-x64",
   "version": "0.1.0",
   "description": "cr-sqlite prebuilt binary for Linux x64",
   "os": ["linux"],

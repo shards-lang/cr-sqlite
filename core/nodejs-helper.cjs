@@ -3,10 +3,10 @@ const { join } = require("node:path");
 const { existsSync } = require("node:fs");
 
 const PLATFORM_PACKAGES = {
-  "linux-x64": "@anthropic/crsqlite-linux-x64",
-  "darwin-arm64": "@anthropic/crsqlite-darwin-arm64",
-  "darwin-x64": "@anthropic/crsqlite-darwin-x64",
-  "win32-x64": "@anthropic/crsqlite-win32-x64",
+  "linux-x64": "@shards-lang/crsqlite-linux-x64",
+  "darwin-arm64": "@shards-lang/crsqlite-darwin-arm64",
+  "darwin-x64": "@shards-lang/crsqlite-darwin-x64",
+  "win32-x64": "@shards-lang/crsqlite-win32-x64",
 };
 
 function resolve() {

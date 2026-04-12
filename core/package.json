@@ -1,5 +1,5 @@
 {
-  "name": "@anthropic/crsqlite",
+  "name": "@shards-lang/crsqlite",
   "version": "0.1.0",
   "description": "cr-sqlite loadable extension for Node.js — CRDT-based multi-master replication for SQLite",
   "type": "module",
@@ -26,10 +26,10 @@
     "node": ">=22.5.0"
   },
   "optionalDependencies": {
-    "@anthropic/crsqlite-linux-x64": "0.1.0",
-    "@anthropic/crsqlite-darwin-arm64": "0.1.0",
-    "@anthropic/crsqlite-darwin-x64": "0.1.0",
-    "@anthropic/crsqlite-win32-x64": "0.1.0"
+    "@shards-lang/crsqlite-linux-x64": "0.1.0",
+    "@shards-lang/crsqlite-darwin-arm64": "0.1.0",
+    "@shards-lang/crsqlite-darwin-x64": "0.1.0",
+    "@shards-lang/crsqlite-win32-x64": "0.1.0"
   },
   "license": "MIT",
   "repository": {

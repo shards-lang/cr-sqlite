@@ -1,5 +1,5 @@
 {
-  "name": "@anthropic/crsqlite-darwin-arm64",
+  "name": "@shards-lang/crsqlite-darwin-arm64",
   "version": "0.1.0",
   "description": "cr-sqlite prebuilt binary for macOS arm64 (Apple Silicon)",
   "os": ["darwin"],
