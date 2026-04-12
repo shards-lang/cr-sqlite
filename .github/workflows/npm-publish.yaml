@@ -4,7 +4,8 @@ on:
 name: "npm-publish"
 
 # The release tag must match the version in package.json (e.g. v0.1.0).
-# Set NPM_TOKEN as a repository secret to authenticate with npm.
+# Uses npm trusted publishing (OIDC provenance) — no NPM_TOKEN secret needed.
+# Setup: on npmjs.com, link each package to this repo + workflow file.
 
 jobs:
   build:
@@ -82,6 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -104,18 +106,14 @@ jobs:
           done
 
       - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for platform in linux-x64 darwin-arm64 darwin-x64 win32-x64; do
             cd npm/crsqlite-${platform}
-            npm publish --access public || echo "Skipped crsqlite-${platform} (may already exist)"
+            npm publish --access public --provenance || echo "Skipped crsqlite-${platform} (may already exist)"
             cd ../..
           done
 
       - name: Publish main package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd core
-          npm publish --access public
+          npm publish --access public --provenance
