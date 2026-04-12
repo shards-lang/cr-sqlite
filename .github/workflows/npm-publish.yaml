@@ -1,0 +1,119 @@
+on:
+  release:
+    types: [published]
+name: "npm-publish"
+
+# The release tag must match the version in package.json (e.g. v0.1.0).
+# Uses npm trusted publishing (OIDC provenance) — no NPM_TOKEN secret needed.
+# Setup: on npmjs.com, link each package to this repo + workflow file.
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            ext: so
+          - os: macos-14
+            platform: darwin-arm64
+            ext: dylib
+          - os: macos-13
+            platform: darwin-x64
+            ext: dylib
+          - os: windows-latest
+            platform: win32-x64
+            ext: dll
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build extension
+        run: |
+          cd core
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+
+      - name: Copy binary to platform package
+        shell: bash
+        run: |
+          cp core/build/crsqlite.${{ matrix.ext }} npm/crsqlite-${{ matrix.platform }}/crsqlite.${{ matrix.ext }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crsqlite-${{ matrix.platform }}
+          path: npm/crsqlite-${{ matrix.platform }}/
+
+  test:
+    name: Test ${{ matrix.os }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: macos-14
+            platform: darwin-arm64
+          - os: macos-13
+            platform: darwin-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build extension
+        run: |
+          cd core
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Run integration tests
+        run: |
+          cd core
+          node --test test/integration.test.mjs
+
+  publish:
+    name: Publish to npm
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Prepare platform packages
+        run: |
+          for platform in linux-x64 darwin-arm64 darwin-x64 win32-x64; do
+            cp -r artifacts/crsqlite-${platform}/* npm/crsqlite-${platform}/
+            echo "Contents of npm/crsqlite-${platform}:"
+            ls -la npm/crsqlite-${platform}/
+          done
+
+      - name: Publish platform packages
+        run: |
+          for platform in linux-x64 darwin-arm64 darwin-x64 win32-x64; do
+            cd npm/crsqlite-${platform}
+            npm publish --access public --provenance || echo "Skipped crsqlite-${platform} (may already exist)"
+            cd ../..
+          done
+
+      - name: Publish main package
+        run: |
+          cd core
+          npm publish --access public --provenance
