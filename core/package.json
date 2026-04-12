@@ -1,0 +1,43 @@
+{
+  "name": "@anthropic/crsqlite",
+  "version": "0.1.0",
+  "description": "cr-sqlite loadable extension for Node.js — CRDT-based multi-master replication for SQLite",
+  "type": "module",
+  "main": "nodejs-helper.cjs",
+  "module": "nodejs-helper.js",
+  "exports": {
+    ".": {
+      "import": "./nodejs-helper.js",
+      "require": "./nodejs-helper.cjs"
+    }
+  },
+  "types": "nodejs-helper.d.ts",
+  "files": [
+    "nodejs-helper.js",
+    "nodejs-helper.cjs",
+    "nodejs-helper.d.ts",
+    "dist/"
+  ],
+  "scripts": {
+    "build": "cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build && mkdir -p dist && cp build/crsqlite.* dist/",
+    "test": "node --test test/integration.test.mjs",
+    "test:c": "cd build && ctest --output-on-failure"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shards-lang/cr-sqlite.git",
+    "directory": "core"
+  },
+  "keywords": [
+    "sqlite",
+    "crdt",
+    "replication",
+    "sync",
+    "multi-master",
+    "extension"
+  ]
+}
