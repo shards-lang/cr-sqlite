@@ -15,8 +15,7 @@
   "files": [
     "nodejs-helper.js",
     "nodejs-helper.cjs",
-    "nodejs-helper.d.ts",
-    "dist/"
+    "nodejs-helper.d.ts"
   ],
   "scripts": {
     "build": "cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build && mkdir -p dist && cp build/crsqlite.* dist/",
@@ -25,6 +24,12 @@
   },
   "engines": {
     "node": ">=22.5.0"
+  },
+  "optionalDependencies": {
+    "@anthropic/crsqlite-linux-x64": "0.1.0",
+    "@anthropic/crsqlite-darwin-arm64": "0.1.0",
+    "@anthropic/crsqlite-darwin-x64": "0.1.0",
+    "@anthropic/crsqlite-win32-x64": "0.1.0"
   },
   "license": "MIT",
   "repository": {

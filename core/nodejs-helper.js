@@ -1,4 +1,10 @@
 // Exports the path to the cr-sqlite loadable extension.
+//
+// Resolution order:
+//   1. Platform-specific npm package (@anthropic/crsqlite-{os}-{cpu})
+//   2. Local build/ directory (development)
+//   3. Local dist/ directory (legacy / manual builds)
+//
 // Usage with node:sqlite (Node >= 22.5):
 //
 //   import { extensionPath } from '@anthropic/crsqlite';
@@ -13,8 +19,43 @@
 //   const db = new Database(':memory:');
 //   db.loadExtension(extensionPath);
 
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-export const extensionPath = join(__dirname, "dist", "crsqlite");
+const require = createRequire(import.meta.url);
+
+const PLATFORM_PACKAGES = {
+  "linux-x64": "@anthropic/crsqlite-linux-x64",
+  "darwin-arm64": "@anthropic/crsqlite-darwin-arm64",
+  "darwin-x64": "@anthropic/crsqlite-darwin-x64",
+  "win32-x64": "@anthropic/crsqlite-win32-x64",
+};
+
+function resolve() {
+  // 1. Try the platform-specific npm package.
+  const key = `${process.platform}-${process.arch}`;
+  const pkg = PLATFORM_PACKAGES[key];
+  if (pkg) {
+    try {
+      return require(pkg).path;
+    } catch {}
+  }
+
+  // 2. Local build/ (dev).
+  const buildPath = join(__dirname, "build", "crsqlite");
+  if (
+    existsSync(buildPath + ".so") ||
+    existsSync(buildPath + ".dylib") ||
+    existsSync(buildPath + ".dll")
+  ) {
+    return buildPath;
+  }
+
+  // 3. Local dist/ (legacy).
+  return join(__dirname, "dist", "crsqlite");
+}
+
+export const extensionPath = resolve();

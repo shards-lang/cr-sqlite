@@ -1,0 +1,15 @@
+{
+  "name": "@anthropic/crsqlite-win32-x64",
+  "version": "0.1.0",
+  "description": "cr-sqlite prebuilt binary for Windows x64",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "main": "index.js",
+  "files": ["index.js", "crsqlite.dll"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shards-lang/cr-sqlite.git",
+    "directory": "npm/crsqlite-win32-x64"
+  }
+}
