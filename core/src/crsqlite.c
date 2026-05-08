@@ -292,6 +292,55 @@ static void x_crsql_sync_bit(sqlite3_context *ctx, int argc,
   sqlite3_result_int(ctx, *syncBitPtr);
 }
 
+// Monotonic upsert into crsql_tracked_peers. Mirrors what merge_insert_impl
+// does for received changes, but lets the application record arbitrary
+// (tag, event) watermarks — for example bumping TRACKED_EVENT_SENT (=1)
+// after successfully shipping changes to a peer. The watermark only
+// advances; an attempt to write a smaller (version, seq) is a no-op.
+//
+// Args: site_id BLOB(16), version INTEGER, seq INTEGER, tag INTEGER,
+//       event INTEGER. Returns NULL on success.
+static void x_crsql_set_tracked_peer(sqlite3_context *ctx, int argc,
+                                      sqlite3_value **argv) {
+  if (argc != 5) {
+    sqlite3_result_error(
+        ctx,
+        "crsql_set_tracked_peer expects (site_id, version, seq, tag, event)",
+        -1);
+    return;
+  }
+  if (sqlite3_value_type(argv[0]) != SQLITE_BLOB ||
+      sqlite3_value_bytes(argv[0]) != SITE_ID_LEN) {
+    sqlite3_result_error(ctx, "site_id must be a 16-byte BLOB", -1);
+    return;
+  }
+  crsql_ExtData *pExtData = (crsql_ExtData *)sqlite3_user_data(ctx);
+  sqlite3_stmt *s = pExtData->pUpsertTrackedPeerStmt;
+  if (!s) {
+    sqlite3_result_error(ctx, "tracked-peer statement not prepared", -1);
+    return;
+  }
+  sqlite3_reset(s);
+  int rc = sqlite3_bind_value(s, 1, argv[0]);
+  if (rc == SQLITE_OK) rc = sqlite3_bind_value(s, 2, argv[1]);
+  if (rc == SQLITE_OK) rc = sqlite3_bind_value(s, 3, argv[2]);
+  if (rc == SQLITE_OK) rc = sqlite3_bind_value(s, 4, argv[3]);
+  if (rc == SQLITE_OK) rc = sqlite3_bind_value(s, 5, argv[4]);
+  if (rc != SQLITE_OK) {
+    sqlite3_reset(s);
+    sqlite3_result_error(ctx, "failed to bind tracked-peer args", -1);
+    return;
+  }
+  rc = sqlite3_step(s);
+  sqlite3_reset(s);
+  if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+    sqlite3_result_error(ctx, sqlite3_errmsg(sqlite3_context_db_handle(ctx)),
+                         -1);
+    return;
+  }
+  sqlite3_result_null(ctx);
+}
+
 static void x_crsql_sha(sqlite3_context *ctx, int argc,
                          sqlite3_value **argv) {
 #ifdef CRSQLITE_COMMIT_SHA
@@ -405,6 +454,12 @@ __declspec(dllexport)
       db, "crsql_sha", 0,
       SQLITE_UTF8 | SQLITE_INNOCUOUS | SQLITE_DETERMINISTIC, 0,
       x_crsql_sha, 0, 0, 0);
+  if (rc != SQLITE_OK) goto err_free_ext;
+
+  rc = sqlite3_create_function_v2(
+      db, "crsql_set_tracked_peer", 5,
+      SQLITE_UTF8 | SQLITE_DIRECTONLY, pExtData,
+      x_crsql_set_tracked_peer, 0, 0, 0);
   if (rc != SQLITE_OK) goto err_free_ext;
 
   rc = sqlite3_create_function_v2(

@@ -42,6 +42,10 @@ struct crsql_ExtData {
   sqlite3_stmt *pSetSiteIdOrdinalStmt;
   sqlite3_stmt *pSelectSiteIdOrdinalStmt;
   sqlite3_stmt *pSelectClockTablesStmt;
+  // Monotonic upsert into crsql_tracked_peers. Used by the merge path to
+  // auto-record a per-peer (db_version, seq) watermark and by the
+  // crsql_set_tracked_peer SQL function for explicit application use.
+  sqlite3_stmt *pUpsertTrackedPeerStmt;
 
   int mergeEqualValues;
 };
