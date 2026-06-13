@@ -86,6 +86,15 @@ Node A                              Node B
 
 Both nodes converge to the same state regardless of sync order.
 
+### Tracking Sync Watermarks (optional)
+
+To support incremental sync without rescanning, cr-sqlite maintains a `crsql_tracked_peers(site_id, version, seq, tag, event)` table of per-peer `(db_version, seq)` watermarks:
+
+- **RECEIVED** (`event = 0`) is written automatically: every change merged through `crsql_changes` advances the watermark for its originating `site_id`. This happens even for no-op merges (older or losing changes), so a puller never refetches changes it has already seen. Local writes and self-echoes are skipped.
+- **SENT** (`event = 1`) is for the application to record — e.g. after successfully shipping changes to a peer — via `crsql_set_tracked_peer(site_id, version, seq, tag, event)`. `tag` is an application-defined channel (default `0`).
+
+Both are monotonic: a watermark only ever moves forward, so out-of-order or duplicate updates are safe no-ops. Reading is plain SQL: `SELECT version, seq FROM crsql_tracked_peers WHERE site_id = ? AND event = 0`.
+
 ## API Reference
 
 ### Functions
@@ -103,6 +112,7 @@ Both nodes converge to the same state regardless of sync order.
 | `crsql_finalize()` | Clean up before closing the connection |
 | `crsql_config_set(key, val)` | Set a config option (e.g., `'merge-equal-values'`) |
 | `crsql_config_get(key)` | Get a config option |
+| `crsql_set_tracked_peer(site_id, version, seq, tag, event)` | Record a per-peer sync watermark (monotonic — see below) |
 
 ### Changes Virtual Table
 
@@ -164,7 +174,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 cd build && ctest --output-on-failure
 
-# Python correctness tests (148 tests)
+# Python correctness tests (155 tests)
 cd core
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target crsqlite
@@ -181,8 +191,9 @@ cd core && make asan
 
 ## Performance
 
-- Inserts into CRRs are ~2.5x slower than regular SQLite tables (due to trigger overhead and clock table writes)
-- Reads are the same speed as regular SQLite
+- **Reads** are the same speed as regular SQLite.
+- **Local writes** to CRRs are ~2.5x slower than regular SQLite tables (trigger overhead and clock-table writes).
+- **Merging changesets** — `INSERT INTO crsql_changes`, the sync-apply path — is roughly **6x faster than the upstream Rust/C implementation**: importing 100k changes (20k rows) takes ~0.14s here versus ~0.85s upstream, with ~2.8x on idempotent re-imports. (Measured with both extensions built `-O2` and `.load`ed into the same vanilla SQLite 3.42.0, Apple Silicon.) The win is the merge path itself, not the language — the pure-C port *before* this work was actually marginally slower than upstream. It drops the per-row statement prepares and the ephemeral btrees that `RETURNING` clauses forced SQLite to materialize (host `sys` time falls from ~0.55s to ~0.004s), memoizes per-row and per-site lookups, and short-circuits idempotent re-imports to pure clock-table reads. Run `core/test/perf/bench-import.sh` for a repeatable benchmark; see `core/CHANGELOG.md` for the breakdown.
 
 ## Research & Prior Art
 
