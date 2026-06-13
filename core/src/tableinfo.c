@@ -641,8 +641,12 @@ int crsql_get_col_version_stmt(sqlite3 *db, crsql_TableInfo *tblInfo,
     return SQLITE_OK;
   }
   char *esc = crsql_escape_ident(tblInfo->tblName);
+  // site_id rides along in the same clock row at no extra cost; it lets the
+  // merge skip the value comparison when an equal-version change originates
+  // from the same site (i.e. it is the identical change).
   char *sql = sqlite3_mprintf(
-      "SELECT col_version FROM \"%s__crsql_clock\" WHERE key = ? AND col_name = ?",
+      "SELECT col_version, site_id FROM \"%s__crsql_clock\""
+      " WHERE key = ? AND col_name = ?",
       esc);
   sqlite3_free(esc);
   return lazy_prepare(db, &tblInfo->pColVersionStmt, sql, ppStmt);

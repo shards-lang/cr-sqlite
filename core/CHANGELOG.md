@@ -21,6 +21,11 @@
     merge errors.
   - The last `site_id -> ordinal` resolution is memoized (changesets are
     virtually always single-site).
+  - Equal-version changes originating from the site that authored the local
+    clock entry are rejected as identical without fetching the local value
+    for comparison (a site's col_version is monotonic per cell). Idempotent
+    re-imports and own-changes echoes become pure clock-table reads; true
+    concurrent edits (different sites) still tie-break on value.
   - `crsql_next_db_version()` is computed in C and skips its
     `PRAGMA data_version` probe when a transaction already established the
     pending version.

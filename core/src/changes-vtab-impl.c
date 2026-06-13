@@ -654,6 +654,50 @@ static void update_row_memo_cl(crsql_ExtData *extData, int tblInfoIdx,
 }
 
 /**
+ * Resolve the ordinal for a site_id if it is already known to this db,
+ * consulting the (single-entry) memo first. Returns 1 and sets *outOrdinal
+ * when found, 0 when the site has no ordinal yet or on lookup failure.
+ */
+static int lookup_site_ordinal(crsql_ExtData *extData,
+                               const unsigned char *siteId, int siteIdLen,
+                               sqlite3_int64 *outOrdinal) {
+  if (siteIdLen <= 0 || siteId == 0) return 0;
+
+  if (extData->cachedSiteIdLen == siteIdLen &&
+      memcmp(extData->cachedSiteId, siteId, siteIdLen) == 0) {
+    *outOrdinal = extData->cachedSiteIdOrdinal;
+    return 1;
+  }
+
+  int rc = sqlite3_bind_blob(extData->pSelectSiteIdOrdinalStmt, 1, siteId,
+                             siteIdLen, SQLITE_STATIC);
+  if (rc != SQLITE_OK) {
+    sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
+    sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
+    return 0;
+  }
+  rc = sqlite3_step(extData->pSelectSiteIdOrdinalStmt);
+  int found = 0;
+  sqlite3_int64 ordinal = 0;
+  if (rc == SQLITE_ROW) {
+    ordinal = sqlite3_column_int64(extData->pSelectSiteIdOrdinalStmt, 0);
+    found = 1;
+  }
+  sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
+  sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
+
+  if (found) {
+    *outOrdinal = ordinal;
+    if (siteIdLen <= CRSQL_SITE_ID_MEMO_LEN) {
+      memcpy(extData->cachedSiteId, siteId, siteIdLen);
+      extData->cachedSiteIdLen = siteIdLen;
+      extData->cachedSiteIdOrdinal = ordinal;
+    }
+  }
+  return found;
+}
+
+/**
  * Get the local causal length for a key.
  * Returns 0 if no record exists.
  */
@@ -723,6 +767,7 @@ static int did_cid_win(sqlite3 *db, crsql_ExtData *extData,
   rc = sqlite3_step(colVrsnStmt);
   if (rc == SQLITE_ROW) {
     sqlite3_int64 localVersion = sqlite3_column_int64(colVrsnStmt, 0);
+    sqlite3_int64 localSiteOrdinal = sqlite3_column_int64(colVrsnStmt, 1);
     resetCachedStmt(colVrsnStmt);
     // causal lengths are the same. Fall back to original algorithm.
     if (colVersion > localVersion) {
@@ -732,7 +777,22 @@ static int did_cid_win(sqlite3 *db, crsql_ExtData *extData,
       *outWon = 0;
       return SQLITE_OK;
     }
-    // versions equal, fall through to value comparison
+
+    // Versions equal. If the incoming change originates from the same site
+    // that authored the local entry, it is the identical change (a site's
+    // col_version is monotonic per cell): reject it without fetching the
+    // local value. This makes idempotent re-imports and own-changes echoes
+    // pure clock-table reads. Different sites with equal versions are true
+    // concurrent edits and still fall through to the deterministic value
+    // comparison.
+    sqlite3_int64 insertOrdinal = 0;
+    if (lookup_site_ordinal(extData, insertSiteId, insertSiteIdLen,
+                            &insertOrdinal) &&
+        insertOrdinal == localSiteOrdinal) {
+      *outWon = 0;
+      return SQLITE_OK;
+    }
+    // fall through to value comparison
   } else if (rc == SQLITE_DONE) {
     resetCachedStmt(colVrsnStmt);
     // no rows -- incoming wins
@@ -837,49 +897,29 @@ static int set_winner_clock(sqlite3 *db, crsql_ExtData *extData,
   sqlite3_int64 ordinal = 0;
 
   if (insertSiteIdLen > 0 && insertSiteId != 0) {
-    if (extData->cachedSiteIdLen == insertSiteIdLen &&
-        memcmp(extData->cachedSiteId, insertSiteId, insertSiteIdLen) == 0) {
-      // Memo hit: a changeset is virtually always single-site, so this skips
-      // the ordinal select for every change after the first.
-      ordinal = extData->cachedSiteIdOrdinal;
+    // Memoized lookup first: a changeset is virtually always single-site,
+    // so this resolves without a query for every change after the first.
+    if (lookup_site_ordinal(extData, insertSiteId, insertSiteIdLen,
+                            &ordinal)) {
       hasOrdinal = 1;
     } else {
-      // Try to select existing ordinal
-      rc = sqlite3_bind_blob(extData->pSelectSiteIdOrdinalStmt, 1,
-                             insertSiteId, insertSiteIdLen, SQLITE_STATIC);
+      // Unknown site -- insert a new ordinal
+      rc = sqlite3_bind_blob(extData->pSetSiteIdOrdinalStmt, 1, insertSiteId,
+                             insertSiteIdLen, SQLITE_STATIC);
       if (rc != SQLITE_OK) {
-        sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
-        sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
-        return rc;
-      }
-      rc = sqlite3_step(extData->pSelectSiteIdOrdinalStmt);
-      if (rc == SQLITE_ROW) {
-        ordinal = sqlite3_column_int64(extData->pSelectSiteIdOrdinalStmt, 0);
-        hasOrdinal = 1;
-        sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
-        sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
-      } else {
-        sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
-        sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
-
-        // Insert new ordinal
-        rc = sqlite3_bind_blob(extData->pSetSiteIdOrdinalStmt, 1, insertSiteId,
-                               insertSiteIdLen, SQLITE_STATIC);
-        if (rc != SQLITE_OK) {
-          sqlite3_clear_bindings(extData->pSetSiteIdOrdinalStmt);
-          sqlite3_reset(extData->pSetSiteIdOrdinalStmt);
-          return rc;
-        }
-        rc = sqlite3_step(extData->pSetSiteIdOrdinalStmt);
         sqlite3_clear_bindings(extData->pSetSiteIdOrdinalStmt);
         sqlite3_reset(extData->pSetSiteIdOrdinalStmt);
-        if (rc != SQLITE_DONE) {
-          return SQLITE_ABORT;
-        }
-        // ordinal is an INTEGER PRIMARY KEY (rowid alias)
-        ordinal = sqlite3_last_insert_rowid(db);
-        hasOrdinal = 1;
+        return rc;
       }
+      rc = sqlite3_step(extData->pSetSiteIdOrdinalStmt);
+      sqlite3_clear_bindings(extData->pSetSiteIdOrdinalStmt);
+      sqlite3_reset(extData->pSetSiteIdOrdinalStmt);
+      if (rc != SQLITE_DONE) {
+        return SQLITE_ABORT;
+      }
+      // ordinal is an INTEGER PRIMARY KEY (rowid alias)
+      ordinal = sqlite3_last_insert_rowid(db);
+      hasOrdinal = 1;
 
       if (insertSiteIdLen <= CRSQL_SITE_ID_MEMO_LEN) {
         memcpy(extData->cachedSiteId, insertSiteId, insertSiteIdLen);
