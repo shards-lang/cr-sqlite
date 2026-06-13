@@ -11,7 +11,12 @@
     row; values are now read from bound parameters or
     `sqlite3_last_insert_rowid`.
   - Unpacked primary keys are bound directly to the key lookaside statements
-    instead of round-tripping through a per-row `SELECT ?,?,...` prepare.
+    instead of round-tripping through a per-row `SELECT ?,?,...` prepare. This
+    per-row `prepare`/`finalize` was a C-port artifact (bridging packed PKs to
+    a `sqlite3_value**` key API) absent from the original Rust, and was the
+    reason the pre-port merge path was marginally slower than upstream Rust;
+    binding the unpacked values directly -- as the Rust did -- restores parity
+    before the other wins compound on top.
   - The sync bit is toggled through a direct pointer instead of executing
     `SELECT crsql_internal_sync_bit(x)` per merged change.
   - `(table, pk) -> (lookaside key, causal length)` of the last merged row is
