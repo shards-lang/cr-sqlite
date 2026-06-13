@@ -62,6 +62,10 @@ static int trigger_fn_preamble(sqlite3_context *ctx, int argc,
   crsql_ExtData *extData = (crsql_ExtData *)sqlite3_user_data(ctx);
   *ppExtData = extData;
 
+  // Local writes mutate clock state outside the crsql_changes merge path;
+  // any memoized (key, causal length) could go stale.
+  crsql_invalidate_merge_memos(extData);
+
   char *innerErr = 0;
   int rc = crsql_ensure_table_infos_are_up_to_date(
       sqlite3_context_db_handle(ctx), extData, &innerErr);

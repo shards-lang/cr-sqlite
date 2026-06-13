@@ -89,6 +89,20 @@ int crsql_fill_db_version_if_needed(sqlite3 *db, crsql_ExtData *pExtData,
 sqlite_int64 crsql_next_db_version(sqlite3 *db, crsql_ExtData *pExtData,
                                    sqlite3_int64 merging_version,
                                    char **errmsg) {
+  // Fast path: pendingDbVersion is only ever set inside a write transaction
+  // (and reset by the commit/rollback hooks). While that transaction is open
+  // no other connection can advance our stored db_version, so the cached
+  // values are authoritative and we can skip the PRAGMA data_version probe.
+  // This runs once per clock-table write during sync, so it matters.
+  if (pExtData->pendingDbVersion != -1) {
+    sqlite3_int64 fastRet = pExtData->pendingDbVersion;
+    if (merging_version >= 0 && fastRet < merging_version) {
+      fastRet = merging_version;
+    }
+    pExtData->pendingDbVersion = fastRet;
+    return fastRet;
+  }
+
   int rc = crsql_fill_db_version_if_needed(db, pExtData, errmsg);
   if (rc != SQLITE_OK) {
     return -1;

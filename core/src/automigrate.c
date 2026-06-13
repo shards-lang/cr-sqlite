@@ -724,6 +724,9 @@ int crsql_compact_post_alter(sqlite3 *db, const char *tblName,
   // (forward declaration - implemented in db-version.c)
   extern int crsql_fill_db_version_if_needed(sqlite3 *, crsql_ExtData *,
                                              char **);
+  // Compaction can delete pk lookaside rows and clock entries; drop any
+  // merge memos that might reference them.
+  crsql_invalidate_merge_memos(pExtData);
   int rc = crsql_fill_db_version_if_needed(db, pExtData, errmsg);
   if (rc != SQLITE_OK) return rc;
 

@@ -138,6 +138,101 @@ static void testFilters() {
 // {
 // }
 
+/**
+ * The merge path memoizes (table, pk) -> (key, causal length) for consecutive
+ * changes of the same row. A savepoint rollback undoes merge writes the memo
+ * may describe; the changes vtab must invalidate it (xRollbackTo) or stale
+ * causal lengths would make subsequent merges no-ops.
+ */
+// assert() is compiled out by NDEBUG in Release builds; these helpers are
+// always active.
+static void checkOk(int rc, char *err, const char *what) {
+  if (rc != SQLITE_OK) {
+    printf("\t\e[0;31m%s failed: %d (%s)\e[0m\n", what, rc,
+           err ? err : "no message");
+    sqlite3_free(err);
+    abort();
+  }
+  sqlite3_free(err);
+}
+
+static void checkCount(sqlite3 *db, const char *sql, int expected) {
+  sqlite3_stmt *pStmt;
+  int rc = sqlite3_prepare_v2(db, sql, -1, &pStmt, 0);
+  if (rc != SQLITE_OK || sqlite3_step(pStmt) != SQLITE_ROW) {
+    printf("\t\e[0;31mfailed to run: %s\e[0m\n", sql);
+    abort();
+  }
+  int actual = sqlite3_column_int(pStmt, 0);
+  sqlite3_finalize(pStmt);
+  if (actual != expected) {
+    printf("\t\e[0;31m%s: expected %d, got %d\e[0m\n", sql, expected, actual);
+    abort();
+  }
+}
+
+static void testRowMemoSavepointRollback() {
+  printf("RowMemoSavepointRollback\n");
+
+  sqlite3 *db;
+  char *err = 0;
+  int rc = sqlite3_open(":memory:", &db);
+  if (rc != SQLITE_OK) abort();
+
+  rc = sqlite3_exec(
+      db, "CREATE TABLE foo (a INTEGER PRIMARY KEY NOT NULL, b);", 0, 0, &err);
+  checkOk(rc, err, "create table");
+  err = 0;
+  rc = sqlite3_exec(db, "SELECT crsql_as_crr('foo');", 0, 0, &err);
+  checkOk(rc, err, "as_crr");
+  err = 0;
+
+  const char *insertChange =
+      "INSERT INTO crsql_changes "
+      "([table], pk, cid, val, col_version, db_version, site_id, cl, seq) "
+      "VALUES ('foo', X'010901', 'b', 1, 1, 1, X'00000000000000000000000000000001', 1, 0)";
+  const char *deleteChange =
+      "INSERT INTO crsql_changes "
+      "([table], pk, cid, val, col_version, db_version, site_id, cl, seq) "
+      "VALUES ('foo', X'010901', '-1', NULL, 2, 2, X'00000000000000000000000000000001', 2, 0)";
+
+  rc = sqlite3_exec(db, "BEGIN", 0, 0, &err);
+  checkOk(rc, err, "begin");
+  err = 0;
+  // Create the row via a merged change -- memoizes (key, cl = 1)
+  rc = sqlite3_exec(db, insertChange, 0, 0, &err);
+  checkOk(rc, err, "insert change");
+  err = 0;
+  checkCount(db, "SELECT count(*) FROM foo", 1);
+
+  // Delete it inside a savepoint -- memo cl becomes 2 -- then roll back
+  rc = sqlite3_exec(db, "SAVEPOINT sp", 0, 0, &err);
+  checkOk(rc, err, "savepoint");
+  err = 0;
+  rc = sqlite3_exec(db, deleteChange, 0, 0, &err);
+  checkOk(rc, err, "delete change");
+  err = 0;
+  checkCount(db, "SELECT count(*) FROM foo", 0);
+  rc = sqlite3_exec(db, "ROLLBACK TO sp", 0, 0, &err);
+  checkOk(rc, err, "rollback to");
+  err = 0;
+  checkCount(db, "SELECT count(*) FROM foo", 1);
+
+  // Re-apply the delete: with a stale memo (cl = 2) this would be treated as
+  // already-processed and skipped; it must actually delete the row.
+  rc = sqlite3_exec(db, deleteChange, 0, 0, &err);
+  checkOk(rc, err, "re-applied delete change");
+  err = 0;
+  checkCount(db, "SELECT count(*) FROM foo", 0);
+
+  rc = sqlite3_exec(db, "COMMIT", 0, 0, &err);
+  checkOk(rc, err, "commit");
+  checkCount(db, "SELECT count(*) FROM foo", 0);
+
+  crsql_close(db);
+  printf("\t\e[0;32mSuccess\e[0m\n");
+}
+
 // static void testOnlyPkTable()
 // {
 // }
@@ -154,4 +249,5 @@ void crsqlChangesVtabTestSuite() {
   printf("\e[47m\e[1;30mSuite: crsql_changesVtab\e[0m\n");
   testManyPkTable();
   testFilters();
+  testRowMemoSavepointRollback();
 }

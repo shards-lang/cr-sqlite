@@ -111,7 +111,8 @@ int crsql_create_clock_table(sqlite3 *db, crsql_TableInfo *tableInfo,
  * read from read_stmt columns [0..numPks).
  * Returns key >= 0 on success, < 0 on error.
  */
-static sqlite3_int64 backfill_get_or_create_key(sqlite3_stmt *selectKeyStmt,
+static sqlite3_int64 backfill_get_or_create_key(sqlite3 *db,
+                                                sqlite3_stmt *selectKeyStmt,
                                                 sqlite3_stmt *createKeyStmt,
                                                 int numPks,
                                                 sqlite3_stmt *readStmt) {
@@ -130,8 +131,9 @@ static sqlite3_int64 backfill_get_or_create_key(sqlite3_stmt *selectKeyStmt,
   }
   sqlite3_reset(selectKeyStmt);
 
-  if (sqlite3_step(createKeyStmt) == SQLITE_ROW) {
-    key = sqlite3_column_int64(createKeyStmt, 0);
+  // __crsql_key is an INTEGER PRIMARY KEY (rowid alias)
+  if (sqlite3_step(createKeyStmt) == SQLITE_DONE) {
+    key = sqlite3_last_insert_rowid(db);
     sqlite3_reset(createKeyStmt);
     return key;
   }
@@ -184,7 +186,7 @@ static int create_clock_rows_from_stmt(sqlite3_stmt *readStmt, sqlite3 *db,
 
   // Prepare create key stmt
   char *createKeySql = sqlite3_mprintf(
-      "INSERT INTO \"%s__crsql_pks\" (%s) VALUES (%s) RETURNING __crsql_key",
+      "INSERT INTO \"%s__crsql_pks\" (%s) VALUES (%s)",
       escTable, pkColList, pkBindings);
   sqlite3_free(pkColList);
   sqlite3_free(pkBindings);
@@ -227,8 +229,9 @@ static int create_clock_rows_from_stmt(sqlite3_stmt *readStmt, sqlite3 *db,
 
   // Iterate rows
   while (sqlite3_step(readStmt) == SQLITE_ROW) {
-    sqlite3_int64 key = backfill_get_or_create_key(selectKeyStmt, createKeyStmt,
-                                                   numPks, readStmt);
+    sqlite3_int64 key = backfill_get_or_create_key(db, selectKeyStmt,
+                                                   createKeyStmt, numPks,
+                                                   readStmt);
     if (key < 0) {
       rc = SQLITE_ERROR;
       break;

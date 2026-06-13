@@ -35,6 +35,7 @@ static int commitHook(void *pUserData) {
   pExtData->pendingDbVersion = -1;
   pExtData->seq = 0;
   pExtData->updatedTableInfosThisTx = 0;
+  crsql_invalidate_merge_memos(pExtData);
   return SQLITE_OK;
 }
 
@@ -43,6 +44,7 @@ static void rollbackHook(void *pUserData) {
   pExtData->pendingDbVersion = -1;
   pExtData->seq = 0;
   pExtData->updatedTableInfosThisTx = 0;
+  crsql_invalidate_merge_memos(pExtData);
 }
 
 #ifdef LIBSQL
@@ -379,6 +381,10 @@ __declspec(dllexport)
 
   crsql_ExtData *pExtData = crsql_newExtData(db, siteIdBuffer);
   if (!pExtData) return SQLITE_ERROR;
+
+  // Let the merge path flip the sync bit directly rather than through
+  // `SELECT crsql_internal_sync_bit(x)` statements.
+  pExtData->syncBitPtr = syncBitPtr;
 
   // --- Register functions that need ExtData ---
 

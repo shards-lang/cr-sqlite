@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "consts.h"
+#include "db-version.h"
 #include "ext-data.h"
 #include "pack-columns.h"
 #include "tableinfo.h"
@@ -641,6 +642,18 @@ int crsql_changes_rowid(sqlite3_vtab_cursor *cur, sqlite_int64 *pRowid) {
 // ---------- Merge helpers ----------
 
 /**
+ * If the last-row memo currently describes (tblInfoIdx, key), update its
+ * cached causal length to reflect a clock write we just performed.
+ */
+static void update_row_memo_cl(crsql_ExtData *extData, int tblInfoIdx,
+                               sqlite3_int64 key, sqlite3_int64 newCl) {
+  if (extData->rowMemoTblInfoIdx == tblInfoIdx &&
+      extData->rowMemoKey == key) {
+    extData->rowMemoLocalCl = newCl;
+  }
+}
+
+/**
  * Get the local causal length for a key.
  * Returns 0 if no record exists.
  */
@@ -824,49 +837,71 @@ static int set_winner_clock(sqlite3 *db, crsql_ExtData *extData,
   sqlite3_int64 ordinal = 0;
 
   if (insertSiteIdLen > 0 && insertSiteId != 0) {
-    // Try to select existing ordinal
-    rc = sqlite3_bind_blob(extData->pSelectSiteIdOrdinalStmt, 1, insertSiteId,
-                           insertSiteIdLen, SQLITE_STATIC);
-    if (rc != SQLITE_OK) {
-      sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
-      sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
-      return rc;
-    }
-    rc = sqlite3_step(extData->pSelectSiteIdOrdinalStmt);
-    if (rc == SQLITE_ROW) {
-      ordinal = sqlite3_column_int64(extData->pSelectSiteIdOrdinalStmt, 0);
+    if (extData->cachedSiteIdLen == insertSiteIdLen &&
+        memcmp(extData->cachedSiteId, insertSiteId, insertSiteIdLen) == 0) {
+      // Memo hit: a changeset is virtually always single-site, so this skips
+      // the ordinal select for every change after the first.
+      ordinal = extData->cachedSiteIdOrdinal;
       hasOrdinal = 1;
-      sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
-      sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
     } else {
-      sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
-      sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
-
-      // Insert new ordinal
-      rc = sqlite3_bind_blob(extData->pSetSiteIdOrdinalStmt, 1, insertSiteId,
-                             insertSiteIdLen, SQLITE_STATIC);
+      // Try to select existing ordinal
+      rc = sqlite3_bind_blob(extData->pSelectSiteIdOrdinalStmt, 1,
+                             insertSiteId, insertSiteIdLen, SQLITE_STATIC);
       if (rc != SQLITE_OK) {
-        sqlite3_clear_bindings(extData->pSetSiteIdOrdinalStmt);
-        sqlite3_reset(extData->pSetSiteIdOrdinalStmt);
+        sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
+        sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
         return rc;
       }
-      rc = sqlite3_step(extData->pSetSiteIdOrdinalStmt);
-      if (rc == SQLITE_DONE) {
+      rc = sqlite3_step(extData->pSelectSiteIdOrdinalStmt);
+      if (rc == SQLITE_ROW) {
+        ordinal = sqlite3_column_int64(extData->pSelectSiteIdOrdinalStmt, 0);
+        hasOrdinal = 1;
+        sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
+        sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
+      } else {
+        sqlite3_clear_bindings(extData->pSelectSiteIdOrdinalStmt);
+        sqlite3_reset(extData->pSelectSiteIdOrdinalStmt);
+
+        // Insert new ordinal
+        rc = sqlite3_bind_blob(extData->pSetSiteIdOrdinalStmt, 1, insertSiteId,
+                               insertSiteIdLen, SQLITE_STATIC);
+        if (rc != SQLITE_OK) {
+          sqlite3_clear_bindings(extData->pSetSiteIdOrdinalStmt);
+          sqlite3_reset(extData->pSetSiteIdOrdinalStmt);
+          return rc;
+        }
+        rc = sqlite3_step(extData->pSetSiteIdOrdinalStmt);
         sqlite3_clear_bindings(extData->pSetSiteIdOrdinalStmt);
         sqlite3_reset(extData->pSetSiteIdOrdinalStmt);
-        return SQLITE_ABORT;
+        if (rc != SQLITE_DONE) {
+          return SQLITE_ABORT;
+        }
+        // ordinal is an INTEGER PRIMARY KEY (rowid alias)
+        ordinal = sqlite3_last_insert_rowid(db);
+        hasOrdinal = 1;
       }
-      // Should be SQLITE_ROW with the returning ordinal
-      ordinal = sqlite3_column_int64(extData->pSetSiteIdOrdinalStmt, 0);
-      hasOrdinal = 1;
-      sqlite3_clear_bindings(extData->pSetSiteIdOrdinalStmt);
-      sqlite3_reset(extData->pSetSiteIdOrdinalStmt);
+
+      if (insertSiteIdLen <= CRSQL_SITE_ID_MEMO_LEN) {
+        memcpy(extData->cachedSiteId, insertSiteId, insertSiteIdLen);
+        extData->cachedSiteIdLen = insertSiteIdLen;
+        extData->cachedSiteIdOrdinal = ordinal;
+      }
     }
   }
 
   sqlite3_stmt *setStmt = 0;
   rc = crsql_get_set_winner_clock_stmt(db, tblInfo, &setStmt);
   if (rc != SQLITE_OK || !setStmt) return SQLITE_ERROR;
+
+  // Compute the next db version in C rather than via the
+  // crsql_next_db_version SQL function inside the insert statement.
+  char *dbVrsnErr = 0;
+  sqlite3_int64 nextDbVrsn =
+      crsql_next_db_version(db, extData, insertDbVrsn, &dbVrsnErr);
+  if (nextDbVrsn < 0) {
+    sqlite3_free(dbVrsnErr);
+    return SQLITE_ERROR;
+  }
 
   rc = sqlite3_bind_int64(setStmt, 1, key);
   if (rc != SQLITE_OK) {
@@ -883,7 +918,7 @@ static int set_winner_clock(sqlite3 *db, crsql_ExtData *extData,
     resetCachedStmt(setStmt);
     return rc;
   }
-  rc = sqlite3_bind_int64(setStmt, 4, insertDbVrsn);
+  rc = sqlite3_bind_int64(setStmt, 4, nextDbVrsn);
   if (rc != SQLITE_OK) {
     resetCachedStmt(setStmt);
     return rc;
@@ -904,20 +939,21 @@ static int set_winner_clock(sqlite3 *db, crsql_ExtData *extData,
   }
 
   rc = sqlite3_step(setStmt);
-  if (rc == SQLITE_ROW) {
-    *outRowid = sqlite3_column_int64(setStmt, 0);
-    resetCachedStmt(setStmt);
+  resetCachedStmt(setStmt);
+  if (rc == SQLITE_DONE) {
+    // The clock table's key for this entry is exactly the key we bound; no
+    // need for a RETURNING round-trip.
+    *outRowid = key;
     return SQLITE_OK;
-  } else {
-    resetCachedStmt(setStmt);
-    return SQLITE_ERROR;
   }
+  return SQLITE_ERROR;
 }
 
 /**
  * Reset clocks when a row is resurrected (causal length increased).
  */
-static int zero_clocks_on_resurrect(sqlite3 *db, crsql_TableInfo *tblInfo,
+static int zero_clocks_on_resurrect(sqlite3 *db, crsql_ExtData *extData,
+                                     crsql_TableInfo *tblInfo,
                                      sqlite3_int64 key,
                                      sqlite3_int64 insertDbVrsn) {
   sqlite3_stmt *zeroStmt = 0;
@@ -925,7 +961,15 @@ static int zero_clocks_on_resurrect(sqlite3 *db, crsql_TableInfo *tblInfo,
       crsql_get_zero_clocks_on_resurrect_stmt(db, tblInfo, &zeroStmt);
   if (rc != SQLITE_OK || !zeroStmt) return SQLITE_ERROR;
 
-  rc = sqlite3_bind_int64(zeroStmt, 1, insertDbVrsn);
+  char *dbVrsnErr = 0;
+  sqlite3_int64 nextDbVrsn =
+      crsql_next_db_version(db, extData, insertDbVrsn, &dbVrsnErr);
+  if (nextDbVrsn < 0) {
+    sqlite3_free(dbVrsnErr);
+    return SQLITE_ERROR;
+  }
+
+  rc = sqlite3_bind_int64(zeroStmt, 1, nextDbVrsn);
   if (rc != SQLITE_OK) {
     resetCachedStmt(zeroStmt);
     return rc;
@@ -962,30 +1006,18 @@ static int merge_sentinel_only_insert(
   }
 
   // Set sync bit, execute merge, clear sync bit
-  rc = sqlite3_step(extData->pSetSyncBitStmt);
-  if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
-    sqlite3_reset(extData->pSetSyncBitStmt);
-    resetCachedStmt(mergeStmt);
-    return rc;
-  }
-  sqlite3_reset(extData->pSetSyncBitStmt);
-
+  *extData->syncBitPtr = 1;
   rc = sqlite3_step(mergeStmt);
   int mergeRc = rc;
   resetCachedStmt(mergeStmt);
-
-  int syncRc = sqlite3_step(extData->pClearSyncBitStmt);
-  sqlite3_reset(extData->pClearSyncBitStmt);
-  if (syncRc != SQLITE_ROW && syncRc != SQLITE_DONE) {
-    return syncRc;
-  }
+  *extData->syncBitPtr = 0;
 
   if (mergeRc != SQLITE_DONE && mergeRc != SQLITE_ROW) {
     return mergeRc;
   }
 
   // Success: zero clocks on resurrect, then set winner clock
-  rc = zero_clocks_on_resurrect(db, tblInfo, key, remoteDbVsn);
+  rc = zero_clocks_on_resurrect(db, extData, tblInfo, key, remoteDbVsn);
   if (rc != SQLITE_OK) return rc;
 
   return set_winner_clock(db, extData, tblInfo, key, SENTINEL_CID,
@@ -1014,24 +1046,11 @@ static int merge_delete(sqlite3 *db, crsql_ExtData *extData,
     return rc;
   }
 
-  // Set sync bit
-  rc = sqlite3_step(extData->pSetSyncBitStmt);
-  if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
-    sqlite3_reset(extData->pSetSyncBitStmt);
-    resetCachedStmt(deleteStmt);
-    return rc;
-  }
-  sqlite3_reset(extData->pSetSyncBitStmt);
-
+  // Set sync bit, execute delete, clear sync bit
+  *extData->syncBitPtr = 1;
   rc = sqlite3_step(deleteStmt);
   resetCachedStmt(deleteStmt);
-
-  // Clear sync bit
-  int syncRc = sqlite3_step(extData->pClearSyncBitStmt);
-  sqlite3_reset(extData->pClearSyncBitStmt);
-  if (syncRc != SQLITE_ROW && syncRc != SQLITE_DONE) {
-    return syncRc;
-  }
+  *extData->syncBitPtr = 0;
 
   if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
     return rc;
@@ -1076,6 +1095,10 @@ int crsql_changes_update(sqlite3_vtab *pVTab, int argc, sqlite3_value **argv,
     char *errMsg = 0;
     int rc = merge_insert_impl(pVTab, argc, argv, pRowid, &errMsg);
     if (rc != SQLITE_OK) {
+      // A failed insert aborts the statement and SQLite's statement journal
+      // undoes any partial writes (including prior rows of a multi-row
+      // INSERT), so the merge memos no longer describe reality.
+      crsql_invalidate_merge_memos(((crsql_Changes_vtab *)pVTab)->pExtData);
       pVTab->zErrMsg = errMsg;
     }
     return rc;
@@ -1162,71 +1185,55 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
     return SQLITE_ERROR;
   }
 
-  // Convert unpacked PKs to sqlite3_value** for crsql_get_or_create_key.
-  // We prepare a temporary "SELECT ?,?,?..." statement, bind the unpacked
-  // column values, step it, then extract sqlite3_column_value pointers.
+  // Resolve (pk lookaside key, local causal length) for this row.
+  // Changesets are ordered by (db_version, seq) so the N column changes of a
+  // single row arrive back-to-back: memoize the last resolution and skip the
+  // lookaside + causal length queries when the next change hits the same row.
+  crsql_ExtData *extData = tab->pExtData;
   sqlite3_int64 key = -1;
-  {
-    char *bindList = crsql_binding_list(numUnpackedPks);
-    if (!bindList) {
+  sqlite3_int64 localCl = 0;
+
+  if (extData->rowMemoTblInfoIdx == tblInfoIdx &&
+      extData->rowMemoPkLen == pkBlobLen && pkBlobLen > 0 &&
+      memcmp(extData->rowMemoPkBlob, pkBlob, pkBlobLen) == 0) {
+    key = extData->rowMemoKey;
+    localCl = extData->rowMemoLocalCl;
+  } else {
+    key = crsql_get_or_create_key_packed(db, tblInfo, unpackedPks,
+                                         numUnpackedPks, errmsg);
+    if (key < 0) {
       crsql_free_column_values(unpackedPks, numUnpackedPks);
-      return SQLITE_NOMEM;
-    }
-    char *tmpSql = sqlite3_mprintf("SELECT %s", bindList);
-    sqlite3_free(bindList);
-    if (!tmpSql) {
-      crsql_free_column_values(unpackedPks, numUnpackedPks);
-      return SQLITE_NOMEM;
-    }
-    sqlite3_stmt *pTmpStmt = 0;
-    rc = sqlite3_prepare_v2(db, tmpSql, -1, &pTmpStmt, 0);
-    sqlite3_free(tmpSql);
-    if (rc != SQLITE_OK) {
-      crsql_free_column_values(unpackedPks, numUnpackedPks);
-      return rc;
-    }
-    rc = crsql_bind_package_to_stmt(pTmpStmt, unpackedPks, numUnpackedPks, 0);
-    if (rc != SQLITE_OK) {
-      sqlite3_finalize(pTmpStmt);
-      crsql_free_column_values(unpackedPks, numUnpackedPks);
-      return rc;
-    }
-    rc = sqlite3_step(pTmpStmt);
-    if (rc != SQLITE_ROW) {
-      sqlite3_finalize(pTmpStmt);
-      crsql_free_column_values(unpackedPks, numUnpackedPks);
+      if (!*errmsg) {
+        *errmsg = sqlite3_mprintf("crsql - failed to get or create key");
+      }
       return SQLITE_ERROR;
     }
-    // Extract column values as sqlite3_value*
-    sqlite3_value **pkValues =
-        (sqlite3_value **)sqlite3_malloc(sizeof(sqlite3_value *) * numUnpackedPks);
-    if (!pkValues) {
-      sqlite3_finalize(pTmpStmt);
+
+    rc = get_local_cl(db, tblInfo, key, &localCl);
+    if (rc != SQLITE_OK) {
       crsql_free_column_values(unpackedPks, numUnpackedPks);
-      return SQLITE_NOMEM;
-    }
-    for (int i = 0; i < numUnpackedPks; i++) {
-      pkValues[i] = sqlite3_column_value(pTmpStmt, i);
+      return rc;
     }
 
-    key = crsql_get_or_create_key(db, tblInfo, pkValues, numUnpackedPks, errmsg);
-    sqlite3_free(pkValues);
-    sqlite3_finalize(pTmpStmt);
-  }
-
-  if (key < 0) {
-    crsql_free_column_values(unpackedPks, numUnpackedPks);
-    if (!*errmsg) {
-      *errmsg = sqlite3_mprintf("crsql - failed to get or create key");
+    // Memoize for the subsequent changes of this row.
+    extData->rowMemoTblInfoIdx = -1;
+    if (pkBlobLen > 0) {
+      if (pkBlobLen > extData->rowMemoPkCap) {
+        unsigned char *newBlob =
+            sqlite3_realloc(extData->rowMemoPkBlob, pkBlobLen);
+        if (newBlob) {
+          extData->rowMemoPkBlob = newBlob;
+          extData->rowMemoPkCap = pkBlobLen;
+        }
+      }
+      if (pkBlobLen <= extData->rowMemoPkCap) {
+        memcpy(extData->rowMemoPkBlob, pkBlob, pkBlobLen);
+        extData->rowMemoPkLen = pkBlobLen;
+        extData->rowMemoTblInfoIdx = tblInfoIdx;
+        extData->rowMemoKey = key;
+        extData->rowMemoLocalCl = localCl;
+      }
     }
-    return SQLITE_ERROR;
-  }
-
-  sqlite3_int64 localCl = 0;
-  rc = get_local_cl(db, tblInfo, key, &localCl);
-  if (rc != SQLITE_OK) {
-    crsql_free_column_values(unpackedPks, numUnpackedPks);
-    return rc;
   }
 
   // We can ignore all updates from older causal lengths.
@@ -1253,6 +1260,8 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
                       insertSiteIdLen, insertSeq, &innerRowid);
     crsql_free_column_values(unpackedPks, numUnpackedPks);
     if (rc != SQLITE_OK) return rc;
+    // The delete sentinel's col_version is the row's new causal length.
+    update_row_memo_cl(extData, tblInfoIdx, key, insertColVrsn);
     tab->pExtData->rowsImpacted += 1;
     *rowid = crsql_slab_rowid(tblInfoIdx, innerRowid);
     return SQLITE_OK;
@@ -1271,6 +1280,8 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
                                      insertSiteIdLen, insertSeq, &innerRowid);
     crsql_free_column_values(unpackedPks, numUnpackedPks);
     if (rc != SQLITE_OK) return rc;
+    // The sentinel's col_version is the row's new causal length.
+    update_row_memo_cl(extData, tblInfoIdx, key, insertColVrsn);
     if (innerRowid != -1) {
       tab->pExtData->rowsImpacted += 1;
       *rowid = crsql_slab_rowid(tblInfoIdx, innerRowid);
@@ -1292,6 +1303,7 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
       crsql_free_column_values(unpackedPks, numUnpackedPks);
       return rc;
     }
+    update_row_memo_cl(extData, tblInfoIdx, key, insertCl);
     tab->pExtData->rowsImpacted += 1;
   }
 
@@ -1344,28 +1356,14 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
   }
 
   // Set sync bit, merge, clear sync bit
-  rc = sqlite3_step(tab->pExtData->pSetSyncBitStmt);
-  if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
-    sqlite3_reset(tab->pExtData->pSetSyncBitStmt);
-    resetCachedStmt(mergeStmt);
-    crsql_free_column_values(unpackedPks, numUnpackedPks);
-    return rc;
-  }
-  sqlite3_reset(tab->pExtData->pSetSyncBitStmt);
-
+  *tab->pExtData->syncBitPtr = 1;
   rc = sqlite3_step(mergeStmt);
   resetCachedStmt(mergeStmt);
-
-  int syncRc = sqlite3_step(tab->pExtData->pClearSyncBitStmt);
-  sqlite3_reset(tab->pExtData->pClearSyncBitStmt);
+  *tab->pExtData->syncBitPtr = 0;
 
   if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
     crsql_free_column_values(unpackedPks, numUnpackedPks);
     return rc;
-  }
-  if (syncRc != SQLITE_ROW && syncRc != SQLITE_DONE) {
-    crsql_free_column_values(unpackedPks, numUnpackedPks);
-    return syncRc;
   }
 
   crsql_free_column_values(unpackedPks, numUnpackedPks);
@@ -1375,6 +1373,13 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
                         insertColVrsn, insertDbVrsn, insertSiteId,
                         insertSiteIdLen, insertSeq, &innerRowid);
   if (rc != SQLITE_OK) return rc;
+
+  // A new row (or a resurrection without an explicit sentinel in the
+  // changeset, possible when insertCl == 1) now exists with causal length
+  // insertCl: a clock entry for this column implies the row is alive.
+  if (needsResurrect) {
+    update_row_memo_cl(extData, tblInfoIdx, key, insertCl);
+  }
 
   tab->pExtData->rowsImpacted += 1;
   *rowid = crsql_slab_rowid(tblInfoIdx, innerRowid);

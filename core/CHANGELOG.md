@@ -1,5 +1,30 @@
 # @vlcn.io/crsqlite
 
+## Unreleased
+
+### Patch Changes
+
+- Large speedup (~8x) of merging changes via `INSERT INTO crsql_changes`:
+  - Removed `RETURNING` clauses from hot-path statements (winner clock, pk
+    lookaside, site_id ordinal). `RETURNING` forced SQLite to materialize an
+    ephemeral btree -- with its own pager and page cache -- on every executed
+    row; values are now read from bound parameters or
+    `sqlite3_last_insert_rowid`.
+  - Unpacked primary keys are bound directly to the key lookaside statements
+    instead of round-tripping through a per-row `SELECT ?,?,...` prepare.
+  - The sync bit is toggled through a direct pointer instead of executing
+    `SELECT crsql_internal_sync_bit(x)` per merged change.
+  - `(table, pk) -> (lookaside key, causal length)` of the last merged row is
+    memoized, skipping redundant lookups for the N column changes of a row
+    (changesets arrive ordered by `db_version, seq`). Invalidated on
+    commit/rollback, savepoint rollback, local CRR writes, schema reloads and
+    merge errors.
+  - The last `site_id -> ordinal` resolution is memoized (changesets are
+    virtually always single-site).
+  - `crsql_next_db_version()` is computed in C and skips its
+    `PRAGMA data_version` probe when a transaction already established the
+    pending version.
+
 ## 0.16.3
 
 ### Patch Changes
