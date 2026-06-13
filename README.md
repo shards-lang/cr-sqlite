@@ -11,6 +11,14 @@ Write to your SQLite database while offline. Others write to theirs. Come online
 
 This is a fork of [vlcn-io/cr-sqlite](https://github.com/vlcn-io/cr-sqlite), rewritten as a pure C extension. The original project used a hybrid C/Rust architecture; this fork eliminates the Rust dependency entirely.
 
+### Why a pure-C port?
+
+Upstream is a C shell around a `no_std` Rust core. Embedding Rust there means a pinned old nightly (`nightly-2023-10-05`), a `sqlite-rs-embedded` submodule, cargo, and a custom `#[global_allocator]` that routes every Rust allocation through `sqlite3_malloc` so ownership can cross the FFI boundary without copies — plus hand-written `panic`/`eh_personality` lang items. That's a lot of machinery to make Rust behave the way C does natively, and the hot path is `unsafe`/raw-pointer FFI glue anyway, so little of Rust's safety actually applies.
+
+Dropping it buys: a build with just a C compiler + CMake (no nightly, cargo, or submodules), a ~7× smaller loadable (~158 KB vs ~1.1 MB), one language, and clean valgrind/asan.
+
+Honest trade-offs: this is **not** "C is faster than Rust" — the merge speedup is algorithmic and would be just as fast in Rust. And memory safety now rests on discipline plus tests (155 correctness tests, asan, valgrind) rather than the compiler.
+
 ## Building
 
 Requires only a C compiler and CMake (>= 3.16). No Rust, no Cargo, no nightly toolchains.
