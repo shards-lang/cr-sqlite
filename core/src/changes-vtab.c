@@ -138,8 +138,37 @@ int crsql_changes_column(
 );
 int crsql_changes_eof(sqlite3_vtab_cursor *cur);
 
+/**
+ * The merge path keeps per-transaction memos (see crsql_ExtData). A rollback
+ * -- full or to a savepoint -- undoes clock/lookaside writes those memos may
+ * describe, so they must be dropped. Full rollbacks are also covered by the
+ * connection-level rollback hook; savepoint rollbacks are only visible here.
+ */
+static int changesRollback(sqlite3_vtab *pVTab) {
+  crsql_invalidate_merge_memos(((crsql_Changes_vtab *)pVTab)->pExtData);
+  return SQLITE_OK;
+}
+
+static int changesSavepoint(sqlite3_vtab *pVTab, int n) {
+  (void)pVTab;
+  (void)n;
+  return SQLITE_OK;
+}
+
+static int changesRelease(sqlite3_vtab *pVTab, int n) {
+  (void)pVTab;
+  (void)n;
+  return SQLITE_OK;
+}
+
+static int changesRollbackTo(sqlite3_vtab *pVTab, int n) {
+  (void)n;
+  crsql_invalidate_merge_memos(((crsql_Changes_vtab *)pVTab)->pExtData);
+  return SQLITE_OK;
+}
+
 sqlite3_module crsql_changesModule = {
-    /* iVersion    */ 0,
+    /* iVersion    */ 2,
     /* xCreate     */ 0,
     /* xConnect    */ changesConnect,
     /* xBestIndex  */ crsql_changes_best_index,
@@ -156,12 +185,12 @@ sqlite3_module crsql_changesModule = {
     /* xBegin      */ crsql_changes_begin,
     /* xSync       */ 0,
     /* xCommit     */ crsql_changes_commit,
-    /* xRollback   */ 0,
+    /* xRollback   */ changesRollback,
     /* xFindMethod */ 0,
     /* xRename     */ 0,
-    /* xSavepoint  */ 0,
-    /* xRelease    */ 0,
-    /* xRollbackTo */ 0,
+    /* xSavepoint  */ changesSavepoint,
+    /* xRelease    */ changesRelease,
+    /* xRollbackTo */ changesRollbackTo,
     /* xShadowName */ 0
 #ifdef LIBSQL
     ,

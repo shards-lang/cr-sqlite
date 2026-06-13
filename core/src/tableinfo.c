@@ -449,6 +449,9 @@ static int pull_all_table_infos(sqlite3 *db, crsql_ExtData *pExtData,
                                 char **errmsg) {
   crsql_TableInfoVec *vec = (crsql_TableInfoVec *)pExtData->tableInfos;
 
+  // Table info indices are about to change; drop merge memos keyed on them.
+  crsql_invalidate_merge_memos(pExtData);
+
   // Free old table infos
   for (int i = 0; i < vec->len; i++) {
     free_table_info_contents(&vec->aInfos[i]);
@@ -602,11 +605,15 @@ int crsql_get_set_winner_clock_stmt(sqlite3 *db, crsql_TableInfo *tblInfo,
     return SQLITE_OK;
   }
   char *esc = crsql_escape_ident(tblInfo->tblName);
+  // No RETURNING here: the caller already knows the key it binds, and a
+  // RETURNING clause makes SQLite materialize an ephemeral btree (with its
+  // own pager + page cache) on every execution. The db_version is computed
+  // in C and bound directly rather than invoking the crsql_next_db_version
+  // SQL function per row.
   char *sql = sqlite3_mprintf(
       "INSERT OR REPLACE INTO \"%s__crsql_clock\""
       " (key, col_name, col_version, db_version, seq, site_id)"
-      " VALUES (?, ?, ?, crsql_next_db_version(?), ?, ?)"
-      " RETURNING key", esc);
+      " VALUES (?, ?, ?, ?, ?, ?)", esc);
   sqlite3_free(esc);
   return lazy_prepare(db, &tblInfo->pSetWinnerClockStmt, sql, ppStmt);
 }
@@ -634,8 +641,12 @@ int crsql_get_col_version_stmt(sqlite3 *db, crsql_TableInfo *tblInfo,
     return SQLITE_OK;
   }
   char *esc = crsql_escape_ident(tblInfo->tblName);
+  // site_id rides along in the same clock row at no extra cost; it lets the
+  // merge skip the value comparison when an equal-version change originates
+  // from the same site (i.e. it is the identical change).
   char *sql = sqlite3_mprintf(
-      "SELECT col_version FROM \"%s__crsql_clock\" WHERE key = ? AND col_name = ?",
+      "SELECT col_version, site_id FROM \"%s__crsql_clock\""
+      " WHERE key = ? AND col_name = ?",
       esc);
   sqlite3_free(esc);
   return lazy_prepare(db, &tblInfo->pColVersionStmt, sql, ppStmt);
@@ -711,8 +722,9 @@ int crsql_get_zero_clocks_on_resurrect_stmt(sqlite3 *db,
     return SQLITE_OK;
   }
   char *esc = crsql_escape_ident(tblInfo->tblName);
+  // db_version computed in C and bound directly (see set_winner_clock).
   char *sql = sqlite3_mprintf(
-      "UPDATE \"%s__crsql_clock\" SET col_version = 0, db_version = crsql_next_db_version(?)"
+      "UPDATE \"%s__crsql_clock\" SET col_version = 0, db_version = ?"
       " WHERE key = ? AND col_name IS NOT '" SENTINEL_CID "'",
       esc);
   sqlite3_free(esc);
@@ -820,65 +832,83 @@ int crsql_get_maybe_mark_locally_reinserted_stmt(sqlite3 *db,
 
 // ---------- Key management ----------
 
+static int ensure_select_key_stmt(sqlite3 *db, crsql_TableInfo *tblInfo) {
+  if (tblInfo->pSelectKeyStmt) return SQLITE_OK;
+  char *esc = crsql_escape_ident(tblInfo->tblName);
+  char *where_list = crsql_where_list(tblInfo->pks, tblInfo->pksLen, 0);
+  char *sql = sqlite3_mprintf(
+      "SELECT __crsql_key FROM \"%s__crsql_pks\" WHERE %s", esc, where_list);
+  sqlite3_free(esc);
+  sqlite3_free(where_list);
+  if (!sql) return SQLITE_NOMEM;
+  int rc = sqlite3_prepare_v3(db, sql, -1, SQLITE_PREPARE_PERSISTENT,
+                              &tblInfo->pSelectKeyStmt, 0);
+  sqlite3_free(sql);
+  return rc;
+}
+
+static int ensure_insert_key_stmt(sqlite3 *db, crsql_TableInfo *tblInfo) {
+  if (tblInfo->pInsertKeyStmt) return SQLITE_OK;
+  char *esc = crsql_escape_ident(tblInfo->tblName);
+  char *pk_list = crsql_as_identifier_list(tblInfo->pks, tblInfo->pksLen, 0);
+  char *pk_bindings = crsql_binding_list(tblInfo->pksLen);
+  // __crsql_key is an INTEGER PRIMARY KEY (rowid alias): the assigned key is
+  // read via sqlite3_last_insert_rowid. A RETURNING clause would force an
+  // ephemeral btree (own pager + page cache) on every execution.
+  char *sql = sqlite3_mprintf(
+      "INSERT INTO \"%s__crsql_pks\" (%s) VALUES (%s)",
+      esc, pk_list, pk_bindings);
+  sqlite3_free(esc);
+  sqlite3_free(pk_list);
+  sqlite3_free(pk_bindings);
+  if (!sql) return SQLITE_NOMEM;
+  int rc = sqlite3_prepare_v3(db, sql, -1, SQLITE_PREPARE_PERSISTENT,
+                              &tblInfo->pInsertKeyStmt, 0);
+  sqlite3_free(sql);
+  return rc;
+}
+
+// Step a select-key stmt with bindings already applied.
+static sqlite3_int64 step_key_stmt(sqlite3_stmt *pStmt) {
+  int rc = sqlite3_step(pStmt);
+  sqlite3_int64 key = -1;
+  if (rc == SQLITE_ROW) {
+    key = sqlite3_column_int64(pStmt, 0);
+  }
+  reset_cached_stmt(pStmt);
+  return key;
+}
+
+// Step an insert-key stmt with bindings already applied; the new key is the
+// rowid assigned to the inserted row.
+static sqlite3_int64 step_insert_key_stmt(sqlite3 *db, sqlite3_stmt *pStmt) {
+  int rc = sqlite3_step(pStmt);
+  sqlite3_int64 key = -1;
+  if (rc == SQLITE_DONE) {
+    key = sqlite3_last_insert_rowid(db);
+  }
+  reset_cached_stmt(pStmt);
+  return key;
+}
+
 sqlite3_int64 crsql_get_key(sqlite3 *db, crsql_TableInfo *tblInfo,
                             sqlite3_value **pks, int numPks) {
-  if (!tblInfo->pSelectKeyStmt) {
-    char *esc = crsql_escape_ident(tblInfo->tblName);
-    char *where_list = crsql_where_list(tblInfo->pks, tblInfo->pksLen, 0);
-    char *sql = sqlite3_mprintf(
-        "SELECT __crsql_key FROM \"%s__crsql_pks\" WHERE %s", esc, where_list);
-    sqlite3_free(esc);
-    sqlite3_free(where_list);
-    if (!sql) return -1;
-    int rc = sqlite3_prepare_v3(db, sql, -1, SQLITE_PREPARE_PERSISTENT,
-                                &tblInfo->pSelectKeyStmt, 0);
-    sqlite3_free(sql);
-    if (rc != SQLITE_OK) return -1;
-  }
+  if (ensure_select_key_stmt(db, tblInfo) != SQLITE_OK) return -1;
 
   for (int i = 0; i < numPks; i++) {
     sqlite3_bind_value(tblInfo->pSelectKeyStmt, i + 1, pks[i]);
   }
-
-  int rc = sqlite3_step(tblInfo->pSelectKeyStmt);
-  sqlite3_int64 key = -1;
-  if (rc == SQLITE_ROW) {
-    key = sqlite3_column_int64(tblInfo->pSelectKeyStmt, 0);
-  }
-  reset_cached_stmt(tblInfo->pSelectKeyStmt);
-  return key;
+  return step_key_stmt(tblInfo->pSelectKeyStmt);
 }
 
 static sqlite3_int64 create_key_raw(sqlite3 *db, crsql_TableInfo *tblInfo,
                                     sqlite3_value **pks, int numPks) {
-  if (!tblInfo->pInsertKeyStmt) {
-    char *esc = crsql_escape_ident(tblInfo->tblName);
-    char *pk_list = crsql_as_identifier_list(tblInfo->pks, tblInfo->pksLen, 0);
-    char *pk_bindings = crsql_binding_list(tblInfo->pksLen);
-    char *sql = sqlite3_mprintf(
-        "INSERT INTO \"%s__crsql_pks\" (%s) VALUES (%s) RETURNING __crsql_key",
-        esc, pk_list, pk_bindings);
-    sqlite3_free(esc);
-    sqlite3_free(pk_list);
-    sqlite3_free(pk_bindings);
-    if (!sql) return -1;
-    int rc = sqlite3_prepare_v3(db, sql, -1, SQLITE_PREPARE_PERSISTENT,
-                                &tblInfo->pInsertKeyStmt, 0);
-    sqlite3_free(sql);
-    if (rc != SQLITE_OK) return -1;
-  }
+  if (ensure_insert_key_stmt(db, tblInfo) != SQLITE_OK) return -1;
 
   for (int i = 0; i < numPks; i++) {
     sqlite3_bind_value(tblInfo->pInsertKeyStmt, i + 1, pks[i]);
   }
-
-  int rc = sqlite3_step(tblInfo->pInsertKeyStmt);
-  sqlite3_int64 key = -1;
-  if (rc == SQLITE_ROW) {
-    key = sqlite3_column_int64(tblInfo->pInsertKeyStmt, 0);
-  }
-  reset_cached_stmt(tblInfo->pInsertKeyStmt);
-  return key;
+  return step_insert_key_stmt(db, tblInfo->pInsertKeyStmt);
 }
 
 sqlite3_int64 crsql_get_or_create_key(sqlite3 *db, crsql_TableInfo *tblInfo,
@@ -896,19 +926,58 @@ sqlite3_int64 crsql_get_or_create_key(sqlite3 *db, crsql_TableInfo *tblInfo,
   return key;
 }
 
+/**
+ * Same as crsql_get_or_create_key but takes unpacked ColumnValues directly,
+ * avoiding the temporary `SELECT ?,?,...` statement previously needed to
+ * convert them into sqlite3_value pointers. This is the merge hot path: it
+ * runs once per imported change.
+ */
+sqlite3_int64 crsql_get_or_create_key_packed(sqlite3 *db,
+                                             crsql_TableInfo *tblInfo,
+                                             crsql_ColumnValue *pks,
+                                             int numPks, char **errmsg) {
+  if (ensure_select_key_stmt(db, tblInfo) != SQLITE_OK) return -1;
+
+  int rc = crsql_bind_package_to_stmt(tblInfo->pSelectKeyStmt, pks, numPks, 0);
+  if (rc != SQLITE_OK) {
+    reset_cached_stmt(tblInfo->pSelectKeyStmt);
+    return -1;
+  }
+  sqlite3_int64 key = step_key_stmt(tblInfo->pSelectKeyStmt);
+  if (key >= 0) {
+    return key;
+  }
+
+  if (ensure_insert_key_stmt(db, tblInfo) != SQLITE_OK) return -1;
+  rc = crsql_bind_package_to_stmt(tblInfo->pInsertKeyStmt, pks, numPks, 0);
+  if (rc != SQLITE_OK) {
+    reset_cached_stmt(tblInfo->pInsertKeyStmt);
+    return -1;
+  }
+  key = step_insert_key_stmt(db, tblInfo->pInsertKeyStmt);
+  if (key < 0 && errmsg) {
+    *errmsg = sqlite3_mprintf("Failed to create key for table %s",
+                              tblInfo->tblName);
+  }
+  return key;
+}
+
 sqlite3_int64 crsql_get_or_create_key_for_insert(sqlite3 *db,
                                                   crsql_TableInfo *tblInfo,
                                                   sqlite3_value **pks,
                                                   int numPks,
                                                   char **errmsg) {
-  // Try INSERT OR IGNORE RETURNING first
+  // Try INSERT OR IGNORE first
   if (!tblInfo->pInsertOrIgnoreReturningKeyStmt) {
     char *esc = crsql_escape_ident(tblInfo->tblName);
     char *pk_list = crsql_as_identifier_list(tblInfo->pks, tblInfo->pksLen, 0);
     char *pk_bindings = crsql_binding_list(tblInfo->pksLen);
+    // No RETURNING: whether the insert happened is read via
+    // sqlite3_changes64 and the new key via sqlite3_last_insert_rowid
+    // (__crsql_key is a rowid alias). RETURNING would force an ephemeral
+    // btree per execution.
     char *sql = sqlite3_mprintf(
-        "INSERT OR IGNORE INTO \"%s__crsql_pks\" (%s) VALUES (%s)"
-        " RETURNING __crsql_key",
+        "INSERT OR IGNORE INTO \"%s__crsql_pks\" (%s) VALUES (%s)",
         esc, pk_list, pk_bindings);
     sqlite3_free(esc);
     sqlite3_free(pk_list);
@@ -926,15 +995,14 @@ sqlite3_int64 crsql_get_or_create_key_for_insert(sqlite3 *db,
   }
 
   int rc = sqlite3_step(tblInfo->pInsertOrIgnoreReturningKeyStmt);
-  if (rc == SQLITE_ROW) {
+  if (rc == SQLITE_DONE && sqlite3_changes64(db) > 0) {
     // Newly inserted
-    sqlite3_int64 key =
-        sqlite3_column_int64(tblInfo->pInsertOrIgnoreReturningKeyStmt, 0);
+    sqlite3_int64 key = sqlite3_last_insert_rowid(db);
     reset_cached_stmt(tblInfo->pInsertOrIgnoreReturningKeyStmt);
     return key;
   }
 
-  // Already existed (DONE = insert was ignored), fall back to select
+  // Already existed (insert was ignored), fall back to select
   reset_cached_stmt(tblInfo->pInsertOrIgnoreReturningKeyStmt);
   sqlite3_int64 key = crsql_get_key(db, tblInfo, pks, numPks);
   if (key < 0 && errmsg) {

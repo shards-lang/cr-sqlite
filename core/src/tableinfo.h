@@ -3,6 +3,7 @@
 
 #include "crsqlite.h"
 #include "ext-data.h"
+#include "pack-columns.h"
 
 typedef struct crsql_ColumnInfo crsql_ColumnInfo;
 struct crsql_ColumnInfo {
@@ -81,6 +82,10 @@ sqlite3_int64 crsql_get_or_create_key_for_insert(sqlite3 *db,
                                                   int numPks, char **errmsg);
 sqlite3_int64 crsql_get_key(sqlite3 *db, crsql_TableInfo *tblInfo,
                             sqlite3_value **pks, int numPks);
+sqlite3_int64 crsql_get_or_create_key_packed(sqlite3 *db,
+                                             crsql_TableInfo *tblInfo,
+                                             crsql_ColumnValue *pks,
+                                             int numPks, char **errmsg);
 
 // --- Lazy statement getters ---
 // These prepare statements on first call, cache for subsequent calls.

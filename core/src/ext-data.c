@@ -23,16 +23,12 @@ crsql_ExtData *crsql_newExtData(sqlite3 *db, unsigned char *siteIdBuffer) {
   rc += sqlite3_prepare_v3(db, "PRAGMA data_version", -1,
                            SQLITE_PREPARE_PERSISTENT,
                            &(pExtData->pPragmaDataVersionStmt), 0);
-  pExtData->pSetSyncBitStmt = 0;
-  rc += sqlite3_prepare_v3(db, SET_SYNC_BIT, -1, SQLITE_PREPARE_PERSISTENT,
-                           &(pExtData->pSetSyncBitStmt), 0);
-  pExtData->pClearSyncBitStmt = 0;
-  rc += sqlite3_prepare_v3(db, CLEAR_SYNC_BIT, -1, SQLITE_PREPARE_PERSISTENT,
-                           &(pExtData->pClearSyncBitStmt), 0);
-
+  // `ordinal` is an INTEGER PRIMARY KEY (rowid alias) so the assigned value
+  // is read via sqlite3_last_insert_rowid -- a RETURNING clause would force
+  // an ephemeral btree per execution.
   pExtData->pSetSiteIdOrdinalStmt = 0;
   rc += sqlite3_prepare_v3(
-      db, "INSERT INTO crsql_site_id (site_id) VALUES (?) RETURNING ordinal",
+      db, "INSERT INTO crsql_site_id (site_id) VALUES (?)",
       -1, SQLITE_PREPARE_PERSISTENT, &(pExtData->pSetSiteIdOrdinalStmt), 0);
 
   pExtData->pSelectSiteIdOrdinalStmt = 0;
@@ -55,6 +51,15 @@ crsql_ExtData *crsql_newExtData(sqlite3 *db, unsigned char *siteIdBuffer) {
   pExtData->tableInfos = 0;
   pExtData->rowsImpacted = 0;
   pExtData->updatedTableInfosThisTx = 0;
+  pExtData->syncBitPtr = 0;
+  pExtData->cachedSiteIdLen = 0;
+  pExtData->cachedSiteIdOrdinal = -1;
+  pExtData->rowMemoTblInfoIdx = -1;
+  pExtData->rowMemoPkLen = 0;
+  pExtData->rowMemoPkCap = 0;
+  pExtData->rowMemoPkBlob = 0;
+  pExtData->rowMemoKey = -1;
+  pExtData->rowMemoLocalCl = 0;
   crsql_init_table_info_vec(pExtData);
 
   sqlite3_stmt *pStmt;
@@ -102,13 +107,21 @@ crsql_ExtData *crsql_newExtData(sqlite3 *db, unsigned char *siteIdBuffer) {
   return pExtData;
 }
 
+void crsql_invalidate_merge_memos(crsql_ExtData *pExtData) {
+  pExtData->cachedSiteIdLen = 0;
+  pExtData->cachedSiteIdOrdinal = -1;
+  pExtData->rowMemoTblInfoIdx = -1;
+  pExtData->rowMemoPkLen = 0;
+  pExtData->rowMemoKey = -1;
+  pExtData->rowMemoLocalCl = 0;
+}
+
 void crsql_freeExtData(crsql_ExtData *pExtData) {
   sqlite3_free(pExtData->siteId);
+  sqlite3_free(pExtData->rowMemoPkBlob);
   sqlite3_finalize(pExtData->pDbVersionStmt);
   sqlite3_finalize(pExtData->pPragmaSchemaVersionStmt);
   sqlite3_finalize(pExtData->pPragmaDataVersionStmt);
-  sqlite3_finalize(pExtData->pSetSyncBitStmt);
-  sqlite3_finalize(pExtData->pClearSyncBitStmt);
   sqlite3_finalize(pExtData->pSetSiteIdOrdinalStmt);
   sqlite3_finalize(pExtData->pSelectSiteIdOrdinalStmt);
   sqlite3_finalize(pExtData->pSelectClockTablesStmt);
@@ -126,17 +139,14 @@ void crsql_finalize(crsql_ExtData *pExtData) {
   sqlite3_finalize(pExtData->pDbVersionStmt);
   sqlite3_finalize(pExtData->pPragmaSchemaVersionStmt);
   sqlite3_finalize(pExtData->pPragmaDataVersionStmt);
-  sqlite3_finalize(pExtData->pSetSyncBitStmt);
-  sqlite3_finalize(pExtData->pClearSyncBitStmt);
   sqlite3_finalize(pExtData->pSetSiteIdOrdinalStmt);
   sqlite3_finalize(pExtData->pSelectSiteIdOrdinalStmt);
   sqlite3_finalize(pExtData->pSelectClockTablesStmt);
   crsql_clear_stmt_cache(pExtData);
+  crsql_invalidate_merge_memos(pExtData);
   pExtData->pDbVersionStmt = 0;
   pExtData->pPragmaSchemaVersionStmt = 0;
   pExtData->pPragmaDataVersionStmt = 0;
-  pExtData->pSetSyncBitStmt = 0;
-  pExtData->pClearSyncBitStmt = 0;
   pExtData->pSetSiteIdOrdinalStmt = 0;
   pExtData->pSelectSiteIdOrdinalStmt = 0;
   pExtData->pSelectClockTablesStmt = 0;
