@@ -34,6 +34,24 @@
 #define ROW_TYPE_DELETE 1
 #define ROW_TYPE_PKONLY 2
 
+// Tracked-peer event kinds. Recorded in crsql_tracked_peers.event.
+// RECEIVED is auto-bumped by merge_insert_impl when a change is processed
+// from a remote peer. SENT is reserved for application use (e.g. recording
+// the watermark of changes the local node has shipped to a peer).
+#define TRACKED_EVENT_RECEIVED 0
+#define TRACKED_EVENT_SENT 1
+
+// Monotonic upsert into crsql_tracked_peers: only advances the watermark
+// when the incoming (version, seq) is strictly greater than what is stored.
+// Idempotent on equal values, safe under out-of-order arrival.
+#define UPSERT_TRACKED_PEER                                                   \
+  "INSERT INTO crsql_tracked_peers(site_id, version, seq, tag, event) "       \
+  "VALUES (?1, ?2, ?3, ?4, ?5) "                                              \
+  "ON CONFLICT(site_id, tag, event) DO UPDATE SET "                           \
+  "  version = excluded.version, seq = excluded.seq "                         \
+  "WHERE (excluded.version, excluded.seq) > "                                 \
+  "      (crsql_tracked_peers.version, crsql_tracked_peers.seq)"
+
 // Version int:
 // MM.mm.pp.bb
 // 00 00 00 00

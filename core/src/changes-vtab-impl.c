@@ -1128,6 +1128,35 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
                                sqlite3_value **argv, sqlite3_int64 *rowid,
                                char **errmsg);
 
+// Best-effort auto-update of crsql_tracked_peers for the RECEIVED watermark.
+// Skips when the peer site_id is missing or matches the local site_id (so
+// loop-back inserts produced by local triggers do not pollute the table).
+// Failures are intentionally swallowed: tracking is an optimization for the
+// puller and must not fail an otherwise successful merge. The cached
+// statement uses a monotonic upsert (UPSERT_TRACKED_PEER) so concurrent
+// out-of-order arrivals never roll the watermark backwards.
+static void track_peer_recv(crsql_ExtData *pExtData,
+                             const unsigned char *siteId, int siteIdLen,
+                             sqlite3_int64 version, sqlite3_int64 seq) {
+  if (!siteId || siteIdLen != SITE_ID_LEN) return;
+  if (memcmp(siteId, pExtData->siteId, SITE_ID_LEN) == 0) return;
+
+  sqlite3_stmt *s = pExtData->pUpsertTrackedPeerStmt;
+  if (!s) return;
+  sqlite3_reset(s);
+  if (sqlite3_bind_blob(s, 1, siteId, SITE_ID_LEN, SQLITE_TRANSIENT) !=
+          SQLITE_OK ||
+      sqlite3_bind_int64(s, 2, version) != SQLITE_OK ||
+      sqlite3_bind_int64(s, 3, seq) != SQLITE_OK ||
+      sqlite3_bind_int(s, 4, 0) != SQLITE_OK ||
+      sqlite3_bind_int(s, 5, TRACKED_EVENT_RECEIVED) != SQLITE_OK) {
+    sqlite3_reset(s);
+    return;
+  }
+  (void)sqlite3_step(s);
+  sqlite3_reset(s);
+}
+
 int crsql_changes_update(sqlite3_vtab *pVTab, int argc, sqlite3_value **argv,
                           sqlite3_int64 *pRowid) {
   if (argc > 1 && sqlite3_value_type(argv[0]) == SQLITE_NULL) {
@@ -1199,6 +1228,14 @@ static int merge_insert_impl(sqlite3_vtab *vtab, int argc,
   const unsigned char *insertSiteId =
       (const unsigned char *)sqlite3_value_blob(insertSiteIdVal);
   int insertSiteIdLen = sqlite3_value_bytes(insertSiteIdVal);
+
+  // Auto-record the RECEIVED watermark for this peer. Done eagerly here so
+  // that no-op merges (older CL, losing cid, idempotent re-applies) still
+  // advance the puller's watermark — otherwise we'd keep refetching the
+  // same losing changes. Best-effort; rolls back with the surrounding txn
+  // if the merge ultimately fails.
+  track_peer_recv(tab->pExtData, insertSiteId, insertSiteIdLen, insertDbVrsn,
+                  insertSeq);
 
   // Find table info
   crsql_TableInfoVec *tblInfos =

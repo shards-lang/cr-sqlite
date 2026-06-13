@@ -13,3 +13,11 @@ tsconfig.tsbuildinfo
 .turbo/
 target/
 core/build/
+
+# Claude Code local state
+.claude/
+
+# Prebuilt platform binaries materialized into npm packages
+npm/*/*.dylib
+npm/*/*.so
+npm/*/*.dll

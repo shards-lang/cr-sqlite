@@ -866,6 +866,228 @@ static void testModifyCompoundPK() {
   printf("\t\e[0;32mSuccess\e[0m\n");
 }
 
+// Hard check that survives -DNDEBUG (assert() is a no-op in release).
+// Existing tests in this file embed sqlite3_step inside assert(), which
+// makes them vacuous in release; the test suite as a whole inherits that
+// limitation but this new test must not.
+#define CHECK(cond)                                                          \
+  do {                                                                       \
+    if (!(cond)) {                                                           \
+      fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__,     \
+              #cond);                                                        \
+      abort();                                                               \
+    }                                                                        \
+  } while (0)
+
+// Local sync helper that does not depend on assert(), unlike the file-wide
+// syncLeftToRight which is a no-op under -DNDEBUG.
+static int checkedSyncLeftToRight(sqlite3 *src, sqlite3 *dst) {
+  sqlite3_stmt *pSid = 0;
+  if (sqlite3_prepare_v2(dst, "SELECT crsql_site_id()", -1, &pSid, 0) !=
+      SQLITE_OK)
+    return SQLITE_ERROR;
+  if (sqlite3_step(pSid) != SQLITE_ROW) {
+    sqlite3_finalize(pSid);
+    return SQLITE_ERROR;
+  }
+  sqlite3_stmt *pRead = 0;
+  if (sqlite3_prepare_v2(
+          src,
+          "SELECT * FROM crsql_changes WHERE site_id IS NOT ?",
+          -1, &pRead, 0) != SQLITE_OK) {
+    sqlite3_finalize(pSid);
+    return SQLITE_ERROR;
+  }
+  sqlite3_bind_value(pRead, 1, sqlite3_column_value(pSid, 0));
+
+  sqlite3_stmt *pWrite = 0;
+  if (sqlite3_prepare_v2(
+          dst,
+          "INSERT INTO crsql_changes VALUES (?,?,?,?,?,?,?,?,?)", -1,
+          &pWrite, 0) != SQLITE_OK) {
+    sqlite3_finalize(pRead);
+    sqlite3_finalize(pSid);
+    return SQLITE_ERROR;
+  }
+
+  int rc;
+  while ((rc = sqlite3_step(pRead)) == SQLITE_ROW) {
+    for (int i = 0; i < 9; i++) {
+      if (sqlite3_bind_value(pWrite, i + 1, sqlite3_column_value(pRead, i)) !=
+          SQLITE_OK) {
+        rc = SQLITE_ERROR;
+        goto done;
+      }
+    }
+    if (sqlite3_step(pWrite) != SQLITE_DONE) {
+      fprintf(stderr, "merge step failed: %s\n", sqlite3_errmsg(dst));
+      rc = SQLITE_ERROR;
+      goto done;
+    }
+    sqlite3_reset(pWrite);
+  }
+  if (rc == SQLITE_DONE) rc = SQLITE_OK;
+done:
+  sqlite3_finalize(pWrite);
+  sqlite3_finalize(pRead);
+  sqlite3_finalize(pSid);
+  return rc;
+}
+
+// Verify the auto-tracking behavior of crsql_tracked_peers and that
+// crsql_set_tracked_peer's monotonic upsert never rolls a watermark
+// backwards. After db1 -> db2 sync, db2.crsql_tracked_peers must have
+// exactly one row whose site_id matches db1, event = 0 (RECEIVED), and
+// (version, seq) match the max db_version / seq actually merged.
+static void testTrackedPeers() {
+  printf("trackedPeers\n");
+
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  sqlite3_stmt *pStmt = 0;
+  char *err = 0;
+  int rc;
+
+  CHECK(sqlite3_open(":memory:", &db1) == SQLITE_OK);
+  CHECK(sqlite3_open(":memory:", &db2) == SQLITE_OK);
+  CHECK(createSimpleSchema(db1, &err) == SQLITE_OK);
+  CHECK(createSimpleSchema(db2, &err) == SQLITE_OK);
+
+  // Sanity: each fresh db sees an empty peer-tracking table.
+  CHECK(sqlite3_prepare_v2(db2, "SELECT count(*) FROM crsql_tracked_peers",
+                            -1, &pStmt, 0) == SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+  CHECK(sqlite3_column_int(pStmt, 0) == 0);
+  sqlite3_finalize(pStmt);
+
+  CHECK(sqlite3_exec(db1, "insert into foo values (1, 'a');", 0, 0, &err) ==
+        SQLITE_OK);
+  CHECK(sqlite3_exec(db1, "insert into foo values (2, 'b');", 0, 0, &err) ==
+        SQLITE_OK);
+
+  // Capture the max (db_version, seq) db1 produced; db2 must end up
+  // tracking exactly this watermark for db1 after the sync.
+  sqlite3_int64 expectedVersion = 0;
+  sqlite3_int64 expectedSeq = 0;
+  CHECK(sqlite3_prepare_v2(
+            db1,
+            "SELECT max(db_version), max(seq) FROM crsql_changes",
+            -1, &pStmt, 0) == SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+  expectedVersion = sqlite3_column_int64(pStmt, 0);
+  expectedSeq = sqlite3_column_int64(pStmt, 1);
+  sqlite3_finalize(pStmt);
+  CHECK(expectedVersion > 0);
+
+  CHECK(checkedSyncLeftToRight(db1, db2) == SQLITE_OK);
+
+  // db2 should now have exactly one peer row, for db1, with event=RECEIVED
+  // and the watermark we captured above.
+  CHECK(sqlite3_prepare_v2(
+            db2,
+            "SELECT site_id, version, seq, tag, event "
+            "FROM crsql_tracked_peers",
+            -1, &pStmt, 0) == SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+
+  unsigned char trackedSiteId[16];
+  CHECK(sqlite3_column_bytes(pStmt, 0) == 16);
+  memcpy(trackedSiteId, sqlite3_column_blob(pStmt, 0), 16);
+  CHECK(sqlite3_column_int64(pStmt, 1) == expectedVersion);
+  CHECK(sqlite3_column_int64(pStmt, 2) == expectedSeq);
+  CHECK(sqlite3_column_int(pStmt, 3) == 0);   // tag
+  CHECK(sqlite3_column_int(pStmt, 4) == 0);   // RECEIVED
+
+  // No second row from this single sync.
+  CHECK(sqlite3_step(pStmt) == SQLITE_DONE);
+  sqlite3_finalize(pStmt);
+
+  // Recorded site_id must be db1's, not db2's own.
+  CHECK(sqlite3_prepare_v2(db1, "SELECT crsql_site_id()", -1, &pStmt, 0) ==
+        SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+  CHECK(sqlite3_column_bytes(pStmt, 0) == 16);
+  CHECK(memcmp(trackedSiteId, sqlite3_column_blob(pStmt, 0), 16) == 0);
+  sqlite3_finalize(pStmt);
+
+  // Re-syncing the same changes must not advance the watermark (idempotent
+  // upsert with strict-greater guard).
+  CHECK(checkedSyncLeftToRight(db1, db2) == SQLITE_OK);
+  CHECK(sqlite3_prepare_v2(db2,
+                            "SELECT version, seq FROM crsql_tracked_peers",
+                            -1, &pStmt, 0) == SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+  CHECK(sqlite3_column_int64(pStmt, 0) == expectedVersion);
+  CHECK(sqlite3_column_int64(pStmt, 1) == expectedSeq);
+  sqlite3_finalize(pStmt);
+
+  // Local writes on db2 must not produce a self-row.
+  CHECK(sqlite3_exec(db2, "insert into foo values (3, 'c');", 0, 0, &err) ==
+        SQLITE_OK);
+  CHECK(sqlite3_prepare_v2(
+            db2, "SELECT count(*) FROM crsql_tracked_peers", -1, &pStmt, 0) ==
+        SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+  CHECK(sqlite3_column_int(pStmt, 0) == 1);
+  sqlite3_finalize(pStmt);
+
+  // crsql_set_tracked_peer writes a SENT watermark, then a backwards
+  // attempt is silently ignored (monotonic), then a forwards attempt wins.
+  rc = sqlite3_exec(
+      db2,
+      "SELECT crsql_set_tracked_peer("
+      "  (SELECT site_id FROM crsql_tracked_peers LIMIT 1), 100, 5, 0, 1)",
+      0, 0, &err);
+  CHECK(rc == SQLITE_OK);
+
+  CHECK(sqlite3_prepare_v2(
+            db2,
+            "SELECT version, seq FROM crsql_tracked_peers WHERE event = 1",
+            -1, &pStmt, 0) == SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+  CHECK(sqlite3_column_int64(pStmt, 0) == 100);
+  CHECK(sqlite3_column_int64(pStmt, 1) == 5);
+  sqlite3_finalize(pStmt);
+
+  // Backwards write — should be a no-op.
+  rc = sqlite3_exec(
+      db2,
+      "SELECT crsql_set_tracked_peer("
+      "  (SELECT site_id FROM crsql_tracked_peers WHERE event = 1), "
+      "  50, 99, 0, 1)",
+      0, 0, &err);
+  CHECK(rc == SQLITE_OK);
+  CHECK(sqlite3_prepare_v2(
+            db2,
+            "SELECT version, seq FROM crsql_tracked_peers WHERE event = 1",
+            -1, &pStmt, 0) == SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+  CHECK(sqlite3_column_int64(pStmt, 0) == 100);
+  CHECK(sqlite3_column_int64(pStmt, 1) == 5);
+  sqlite3_finalize(pStmt);
+
+  // Forwards write — wins.
+  rc = sqlite3_exec(
+      db2,
+      "SELECT crsql_set_tracked_peer("
+      "  (SELECT site_id FROM crsql_tracked_peers WHERE event = 1), "
+      "  100, 6, 0, 1)",
+      0, 0, &err);
+  CHECK(rc == SQLITE_OK);
+  CHECK(sqlite3_prepare_v2(
+            db2,
+            "SELECT version, seq FROM crsql_tracked_peers WHERE event = 1",
+            -1, &pStmt, 0) == SQLITE_OK);
+  CHECK(sqlite3_step(pStmt) == SQLITE_ROW);
+  CHECK(sqlite3_column_int64(pStmt, 0) == 100);
+  CHECK(sqlite3_column_int64(pStmt, 1) == 6);
+  sqlite3_finalize(pStmt);
+
+  crsql_close(db1);
+  crsql_close(db2);
+  printf("\t\e[0;32mSuccess\e[0m\n");
+}
+
 void crsqlTestSuite() {
   printf("\e[47m\e[1;30mSuite: crsql\e[0m\n");
 
@@ -880,4 +1102,5 @@ void crsqlTestSuite() {
   testRequiredPrimaryKey();
   testModifySinglePK();
   testModifyCompoundPK();
+  testTrackedPeers();
 }

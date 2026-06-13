@@ -41,6 +41,14 @@ crsql_ExtData *crsql_newExtData(sqlite3 *db, unsigned char *siteIdBuffer) {
       sqlite3_prepare_v3(db, CLOCK_TABLES_SELECT, -1, SQLITE_PREPARE_PERSISTENT,
                          &(pExtData->pSelectClockTablesStmt), 0);
 
+  // crsql_tracked_peers is created at extension init in
+  // crsql_init_peer_tracking_table, before this function runs, so the
+  // statement compiles cleanly here.
+  pExtData->pUpsertTrackedPeerStmt = 0;
+  rc += sqlite3_prepare_v3(db, UPSERT_TRACKED_PEER, -1,
+                           SQLITE_PREPARE_PERSISTENT,
+                           &(pExtData->pUpsertTrackedPeerStmt), 0);
+
   pExtData->dbVersion = -1;
   pExtData->pendingDbVersion = -1;
   pExtData->seq = 0;
@@ -125,6 +133,7 @@ void crsql_freeExtData(crsql_ExtData *pExtData) {
   sqlite3_finalize(pExtData->pSetSiteIdOrdinalStmt);
   sqlite3_finalize(pExtData->pSelectSiteIdOrdinalStmt);
   sqlite3_finalize(pExtData->pSelectClockTablesStmt);
+  sqlite3_finalize(pExtData->pUpsertTrackedPeerStmt);
   crsql_clear_stmt_cache(pExtData);
   crsql_drop_table_info_vec(pExtData);
   sqlite3_free(pExtData);
@@ -142,6 +151,7 @@ void crsql_finalize(crsql_ExtData *pExtData) {
   sqlite3_finalize(pExtData->pSetSiteIdOrdinalStmt);
   sqlite3_finalize(pExtData->pSelectSiteIdOrdinalStmt);
   sqlite3_finalize(pExtData->pSelectClockTablesStmt);
+  sqlite3_finalize(pExtData->pUpsertTrackedPeerStmt);
   crsql_clear_stmt_cache(pExtData);
   crsql_invalidate_merge_memos(pExtData);
   pExtData->pDbVersionStmt = 0;
@@ -150,6 +160,7 @@ void crsql_finalize(crsql_ExtData *pExtData) {
   pExtData->pSetSiteIdOrdinalStmt = 0;
   pExtData->pSelectSiteIdOrdinalStmt = 0;
   pExtData->pSelectClockTablesStmt = 0;
+  pExtData->pUpsertTrackedPeerStmt = 0;
 }
 
 #define DB_VERSION_SCHEMA_VERSION 0
